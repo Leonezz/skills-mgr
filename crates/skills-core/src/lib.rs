@@ -1,10 +1,9 @@
 pub mod config;
 pub mod db;
+pub mod placements;
 pub mod profiles;
 pub mod registry;
 
-pub use config::{
-    AgentsConfig, AppDirs, ProfilesConfig, SourcesConfig,
-};
+pub use config::{AgentsConfig, AppDirs, ProfilesConfig, SourcesConfig};
 pub use db::Database;
 pub use registry::Registry;

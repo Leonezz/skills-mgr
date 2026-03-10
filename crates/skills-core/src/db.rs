@@ -169,6 +169,171 @@ impl Database {
         .await?;
         Ok(rows)
     }
+
+    // --- Placements ---
+
+    pub async fn insert_placement(
+        &self,
+        project_id: i64,
+        skill_name: &str,
+        agent_name: &str,
+        target_path: &str,
+    ) -> Result<i64> {
+        let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+        let result = sqlx::query(
+            "INSERT INTO placements (project_id, skill_name, agent_name, target_path, placed_at)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT (project_id, skill_name, agent_name) DO UPDATE SET placed_at = excluded.placed_at
+             RETURNING id",
+        )
+        .bind(project_id)
+        .bind(skill_name)
+        .bind(agent_name)
+        .bind(target_path)
+        .bind(&now)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(sqlx::Row::get::<i64, _>(&result, 0))
+    }
+
+    pub async fn link_placement_profile(&self, placement_id: i64, profile_name: &str) -> Result<()> {
+        sqlx::query(
+            "INSERT OR IGNORE INTO placement_profiles (placement_id, profile_name) VALUES (?, ?)",
+        )
+        .bind(placement_id)
+        .bind(profile_name)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn unlink_placement_profile(&self, placement_id: i64, profile_name: &str) -> Result<()> {
+        sqlx::query(
+            "DELETE FROM placement_profiles WHERE placement_id = ? AND profile_name = ?",
+        )
+        .bind(placement_id)
+        .bind(profile_name)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn get_placement_profile_count(&self, placement_id: i64) -> Result<i64> {
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM placement_profiles WHERE placement_id = ?",
+        )
+        .bind(placement_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.0)
+    }
+
+    pub async fn delete_placement(&self, placement_id: i64) -> Result<()> {
+        sqlx::query("DELETE FROM placements WHERE id = ?")
+            .bind(placement_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn get_placements_for_project_profile(
+        &self,
+        project_id: i64,
+        profile_name: &str,
+    ) -> Result<Vec<PlacementRow>> {
+        let rows = sqlx::query_as::<_, PlacementRow>(
+            "SELECT p.id, p.project_id, p.skill_name, p.agent_name, p.target_path, p.placed_at
+             FROM placements p
+             JOIN placement_profiles pp ON p.id = pp.placement_id
+             WHERE p.project_id = ? AND pp.profile_name = ?",
+        )
+        .bind(project_id)
+        .bind(profile_name)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn get_all_placements_for_project(&self, project_id: i64) -> Result<Vec<PlacementRow>> {
+        let rows = sqlx::query_as::<_, PlacementRow>(
+            "SELECT id, project_id, skill_name, agent_name, target_path, placed_at
+             FROM placements WHERE project_id = ?",
+        )
+        .bind(project_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn get_placements_for_skill(&self, skill_name: &str) -> Result<Vec<PlacementRow>> {
+        let rows = sqlx::query_as::<_, PlacementRow>(
+            "SELECT id, project_id, skill_name, agent_name, target_path, placed_at
+             FROM placements WHERE skill_name = ?",
+        )
+        .bind(skill_name)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn find_conflict(&self, project_id: i64, target_path: &str) -> Result<Option<PlacementRow>> {
+        let row = sqlx::query_as::<_, PlacementRow>(
+            "SELECT id, project_id, skill_name, agent_name, target_path, placed_at
+             FROM placements WHERE project_id = ? AND target_path = ?",
+        )
+        .bind(project_id)
+        .bind(target_path)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    // --- Project Profiles ---
+
+    pub async fn activate_project_profile(&self, project_id: i64, profile_name: &str) -> Result<()> {
+        let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+        sqlx::query(
+            "INSERT OR IGNORE INTO project_profiles (project_id, profile_name, activated_at) VALUES (?, ?, ?)",
+        )
+        .bind(project_id)
+        .bind(profile_name)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn deactivate_project_profile(&self, project_id: i64, profile_name: &str) -> Result<()> {
+        sqlx::query(
+            "DELETE FROM project_profiles WHERE project_id = ? AND profile_name = ?",
+        )
+        .bind(project_id)
+        .bind(profile_name)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn get_active_profiles(&self, project_id: i64) -> Result<Vec<String>> {
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT profile_name FROM project_profiles WHERE project_id = ? ORDER BY activated_at",
+        )
+        .bind(project_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|(name,)| name).collect())
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct PlacementRow {
+    pub id: i64,
+    pub project_id: i64,
+    pub skill_name: String,
+    pub agent_name: String,
+    pub target_path: String,
+    pub placed_at: String,
 }
 
 #[derive(Debug, sqlx::FromRow)]
