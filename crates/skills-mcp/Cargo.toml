@@ -1,0 +1,11 @@
+[package]
+name = "skills-mcp"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+skills-core = { path = "../skills-core" }
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tokio.workspace = true

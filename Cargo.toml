@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/skills-core",
     "crates/skills-cli",
+    "crates/skills-mcp",
 ]
 
 [workspace.package]
