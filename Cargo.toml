@@ -4,6 +4,7 @@ members = [
     "crates/skills-core",
     "crates/skills-cli",
     "crates/skills-mcp",
+    "crates/skills-gui/src-tauri",
 ]
 
 [workspace.package]
