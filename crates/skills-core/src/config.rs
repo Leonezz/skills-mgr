@@ -33,8 +33,20 @@ impl AppDirs {
         std::fs::create_dir_all(self.registry())?;
         std::fs::create_dir_all(self.local())?;
         std::fs::create_dir_all(self.cache())?;
+        ensure_teaching_skill(self)?;
         Ok(())
     }
+}
+
+/// Write the built-in teaching skill to the registry if not already present.
+fn ensure_teaching_skill(dirs: &AppDirs) -> Result<()> {
+    let skill_dir = dirs.registry().join("skills-mgr-guide");
+    if skill_dir.exists() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(&skill_dir)?;
+    std::fs::write(skill_dir.join("SKILL.md"), include_str!("../assets/skills-mgr-guide.md"))?;
+    Ok(())
 }
 
 // --- TOML Config Types ---

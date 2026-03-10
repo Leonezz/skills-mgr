@@ -266,11 +266,12 @@ mod tests {
     #[test]
     fn test_create_and_list_skill() {
         let (_tmp, reg) = setup_test_registry();
+        let initial_count = reg.list().unwrap().len();
         reg.create("my-skill", "A test skill").unwrap();
         let skills = reg.list().unwrap();
-        assert_eq!(skills.len(), 1);
-        assert_eq!(skills[0].name, "my-skill");
-        assert_eq!(skills[0].description.as_deref(), Some("A test skill"));
+        assert_eq!(skills.len(), initial_count + 1);
+        let skill = skills.iter().find(|s| s.name == "my-skill").unwrap();
+        assert_eq!(skill.description.as_deref(), Some("A test skill"));
     }
 
     #[test]
