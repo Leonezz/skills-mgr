@@ -1,0 +1,13 @@
+[package]
+name = "skills-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "skills-mgr"
+path = "src/main.rs"
+
+[dependencies]
+skills-core = { path = "../skills-core" }
+clap = { version = "4", features = ["derive"] }
+anyhow.workspace = true
