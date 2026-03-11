@@ -93,6 +93,12 @@ impl Registry {
 
     /// Create a new skill with a scaffold SKILL.md.
     pub fn create(&self, name: &str, description: &str) -> Result<PathBuf> {
+        if name.contains('/') || name.contains('\\') || name.contains(':') {
+            bail!(
+                "Invalid skill name '{}': must not contain '/', '\\', or ':'",
+                name
+            );
+        }
         let skill_dir = self.dirs.registry().join(name);
         if skill_dir.exists() {
             bail!("Skill '{}' already exists in registry", name);
@@ -215,13 +221,19 @@ impl Registry {
     pub async fn add_from_remote(&self, url_or_shorthand: &str) -> Result<String> {
         let source = remote::parse_github_url(url_or_shorthand)?;
         let skill_name = remote::derive_skill_name(&source);
+        eprintln!(
+            "[registry] Remote import: owner={}, repo={}, ref={}, subpath={:?}, skill_name={}",
+            source.owner, source.repo, source.git_ref, source.subpath, skill_name
+        );
 
         let dest = self.dirs.registry().join(&skill_name);
         if dest.exists() {
             bail!("Skill '{}' already exists in registry", skill_name);
         }
 
+        eprintln!("[registry] Downloading tarball...");
         let (_tmp_dir, skill_dir) = remote::download_github_skill(&source).await?;
+        eprintln!("[registry] Downloaded, copying to {}", dest.display());
 
         copy_dir_recursive(&skill_dir, &dest)?;
 

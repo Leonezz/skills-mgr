@@ -155,25 +155,46 @@ pub async fn import_remote_skill(
     state: State<'_, AppState>,
     url: String,
 ) -> Result<String, String> {
+    eprintln!("[import_remote_skill] Starting import from: {}", url);
     let registry = Registry::new(state.dirs.clone());
-    let name = registry
-        .add_from_remote(&url)
-        .await
-        .map_err(|e| e.to_string())?;
-    let _ = logging::log(
-        &state.db,
-        LogEntry {
-            source: Source::Gui,
-            agent_name: None,
-            operation: "skill_import",
-            params: None,
-            project_path: None,
-            result: "success",
-            details: &format!("Imported skill '{}' from {}", name, url),
-        },
-    )
-    .await;
-    Ok(format!("Imported skill '{}'", name))
+    let params_json = serde_json::json!({ "url": url });
+    match registry.add_from_remote(&url).await {
+        Ok(name) => {
+            eprintln!("[import_remote_skill] Success: imported '{}'", name);
+            let _ = logging::log(
+                &state.db,
+                LogEntry {
+                    source: Source::Gui,
+                    agent_name: None,
+                    operation: "skill_import_remote",
+                    params: Some(&params_json),
+                    project_path: None,
+                    result: "success",
+                    details: &format!("Imported skill '{}' from {}", name, url),
+                },
+            )
+            .await;
+            Ok(format!("Imported skill '{}'", name))
+        }
+        Err(e) => {
+            let err_msg = e.to_string();
+            eprintln!("[import_remote_skill] Failed: {}", err_msg);
+            let _ = logging::log(
+                &state.db,
+                LogEntry {
+                    source: Source::Gui,
+                    agent_name: None,
+                    operation: "skill_import_remote",
+                    params: Some(&params_json),
+                    project_path: None,
+                    result: "error",
+                    details: &format!("Failed to import from {}: {}", url, err_msg),
+                },
+            )
+            .await;
+            Err(err_msg)
+        }
+    }
 }
 
 #[tauri::command]

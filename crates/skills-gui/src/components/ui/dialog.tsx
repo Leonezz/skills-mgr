@@ -94,20 +94,25 @@ const DialogContent = React.forwardRef<
     <>
       <DialogOverlay />
       <div
-        ref={ref}
-        role="dialog"
-        aria-modal="true"
-        className={cn(
-          "fixed left-1/2 top-1/2 z-50 w-full max-w-md",
-          "rounded-xl border border-border bg-card text-card-foreground shadow-xl",
-          "animate-dialog-in",
-          "p-6",
-          className
-        )}
-        onClick={(e) => e.stopPropagation()}
-        {...props}
+        className="fixed inset-0 z-50 flex items-center justify-center"
+        onClick={() => onOpenChange(false)}
       >
-        {children}
+        <div
+          ref={ref}
+          role="dialog"
+          aria-modal="true"
+          className={cn(
+            "w-full max-w-md",
+            "rounded-xl border border-border bg-card text-card-foreground shadow-xl",
+            "animate-dialog-in",
+            "p-6",
+            className
+          )}
+          onClick={(e) => e.stopPropagation()}
+          {...props}
+        >
+          {children}
+        </div>
       </div>
     </>
   )

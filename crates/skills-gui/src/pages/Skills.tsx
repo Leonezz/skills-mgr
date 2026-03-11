@@ -66,13 +66,25 @@ export function Skills() {
     )
   }, [skills, search])
 
+  function isUrlLike(s: string): boolean {
+    return s.startsWith("http://") || s.startsWith("https://") || /^[a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+/.test(s)
+  }
+
   const createMutation = useMutation({
     mutationFn: () => {
+      // Auto-detect: if user typed a URL/shorthand in create mode, redirect to remote import
+      if (addMode === "create" && isUrlLike(newName)) {
+        return importRemoteSkill(newName)
+      }
       if (addMode === "remote") {
         return importRemoteSkill(remoteUrl)
       }
       if (addMode === "local") {
         return importSkill(newSourcePath)
+      }
+      // Validate skill name doesn't contain path separators
+      if (newName.includes("/") || newName.includes("\\")) {
+        return Promise.reject(new Error("Skill name cannot contain '/' or '\\'. Did you mean to use GitHub Import?"))
       }
       return createSkill(newName, newDesc || "No description")
     },
