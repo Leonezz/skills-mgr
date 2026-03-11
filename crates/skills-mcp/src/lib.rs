@@ -1,8 +1,8 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use skills_core::config::{AgentDef, AgentsConfig, ProfileDef, ProfilesConfig};
-use skills_core::logging::{self, Source};
+use skills_core::logging::{self, LogEntry, Source};
 use skills_core::profiles;
 use skills_core::{AppDirs, Database, Registry};
 
@@ -265,26 +265,58 @@ impl SkillsMcpServer {
             "list_skills" => {
                 let registry = Registry::new(self.dirs.clone());
                 let skills = registry.list()?;
-                let items: Vec<Value> = skills.iter().map(|s| json!({
-                    "name": s.name,
-                    "description": s.description,
-                    "files": s.files,
-                })).collect();
+                let items: Vec<Value> = skills
+                    .iter()
+                    .map(|s| {
+                        json!({
+                            "name": s.name,
+                            "description": s.description,
+                            "files": s.files,
+                        })
+                    })
+                    .collect();
                 Ok(serde_json::to_string_pretty(&items)?)
             }
             "create_skill" => {
                 let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                let desc = args.get("description").and_then(|v| v.as_str()).unwrap_or("");
+                let desc = args
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 let registry = Registry::new(self.dirs.clone());
                 registry.create(name, desc)?;
-                let _ = logging::log(&self.db, Source::Mcp, None, "skill_create", None, None, "success", &format!("Created skill '{}'", name)).await;
+                let _ = logging::log(
+                    &self.db,
+                    LogEntry {
+                        source: Source::Mcp,
+                        agent_name: None,
+                        operation: "skill_create",
+                        params: None,
+                        project_path: None,
+                        result: "success",
+                        details: &format!("Created skill '{}'", name),
+                    },
+                )
+                .await;
                 Ok(format!("Created skill '{}'", name))
             }
             "remove_skill" => {
                 let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
                 let registry = Registry::new(self.dirs.clone());
                 registry.remove(name)?;
-                let _ = logging::log(&self.db, Source::Mcp, None, "skill_remove", None, None, "success", &format!("Removed skill '{}'", name)).await;
+                let _ = logging::log(
+                    &self.db,
+                    LogEntry {
+                        source: Source::Mcp,
+                        agent_name: None,
+                        operation: "skill_remove",
+                        params: None,
+                        project_path: None,
+                        result: "success",
+                        details: &format!("Removed skill '{}'", name),
+                    },
+                )
+                .await;
                 Ok(format!("Removed skill '{}'", name))
             }
             "list_profiles" => {
@@ -293,21 +325,38 @@ impl SkillsMcpServer {
             }
             "create_profile" => {
                 let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                let skills: Vec<String> = args.get("skills")
+                let skills: Vec<String> = args
+                    .get("skills")
                     .and_then(|v| serde_json::from_value(v.clone()).ok())
                     .unwrap_or_default();
-                let includes: Vec<String> = args.get("includes")
+                let includes: Vec<String> = args
+                    .get("includes")
                     .and_then(|v| serde_json::from_value(v.clone()).ok())
                     .unwrap_or_default();
                 let mut config = ProfilesConfig::load(&self.dirs.profiles_toml())?;
-                config.profiles.insert(name.to_string(), ProfileDef {
-                    description: None,
-                    skills,
-                    includes,
-                });
+                config.profiles.insert(
+                    name.to_string(),
+                    ProfileDef {
+                        description: None,
+                        skills,
+                        includes,
+                    },
+                );
                 profiles::validate_no_cycles(&config)?;
                 config.save(&self.dirs.profiles_toml())?;
-                let _ = logging::log(&self.db, Source::Mcp, None, "profile_create", None, None, "success", &format!("Created profile '{}'", name)).await;
+                let _ = logging::log(
+                    &self.db,
+                    LogEntry {
+                        source: Source::Mcp,
+                        agent_name: None,
+                        operation: "profile_create",
+                        params: None,
+                        project_path: None,
+                        result: "success",
+                        details: &format!("Created profile '{}'", name),
+                    },
+                )
+                .await;
                 Ok(format!("Created profile '{}'", name))
             }
             "delete_profile" => {
@@ -315,7 +364,19 @@ impl SkillsMcpServer {
                 let mut config = ProfilesConfig::load(&self.dirs.profiles_toml())?;
                 config.profiles.remove(name);
                 config.save(&self.dirs.profiles_toml())?;
-                let _ = logging::log(&self.db, Source::Mcp, None, "profile_delete", None, None, "success", &format!("Deleted profile '{}'", name)).await;
+                let _ = logging::log(
+                    &self.db,
+                    LogEntry {
+                        source: Source::Mcp,
+                        agent_name: None,
+                        operation: "profile_delete",
+                        params: None,
+                        project_path: None,
+                        result: "success",
+                        details: &format!("Deleted profile '{}'", name),
+                    },
+                )
+                .await;
                 Ok(format!("Deleted profile '{}'", name))
             }
             "list_agents" => {
@@ -324,38 +385,112 @@ impl SkillsMcpServer {
             }
             "add_agent" => {
                 let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                let project_path = args.get("project_path").and_then(|v| v.as_str()).unwrap_or("");
-                let global_path = args.get("global_path").and_then(|v| v.as_str()).unwrap_or("");
+                let project_path = args
+                    .get("project_path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let global_path = args
+                    .get("global_path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 let mut config = AgentsConfig::load(&self.dirs.agents_toml())?;
-                config.agents.insert(name.to_string(), AgentDef {
-                    project_path: project_path.to_string(),
-                    global_path: global_path.to_string(),
-                });
+                config.agents.insert(
+                    name.to_string(),
+                    AgentDef {
+                        project_path: project_path.to_string(),
+                        global_path: global_path.to_string(),
+                    },
+                );
                 config.save(&self.dirs.agents_toml())?;
-                let _ = logging::log(&self.db, Source::Mcp, None, "agent_add", None, None, "success", &format!("Added agent '{}'", name)).await;
+                let _ = logging::log(
+                    &self.db,
+                    LogEntry {
+                        source: Source::Mcp,
+                        agent_name: None,
+                        operation: "agent_add",
+                        params: None,
+                        project_path: None,
+                        result: "success",
+                        details: &format!("Added agent '{}'", name),
+                    },
+                )
+                .await;
                 Ok(format!("Added agent '{}'", name))
             }
             "activate_profile" => {
                 let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                let project_path = args.get("project_path").and_then(|v| v.as_str()).unwrap_or("");
+                let project_path = args
+                    .get("project_path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
                 let profiles_config = ProfilesConfig::load(&self.dirs.profiles_toml())?;
                 let agents_config = AgentsConfig::load(&self.dirs.agents_toml())?;
-                let result = skills_core::placements::activate(&self.dirs, &self.db, &profiles_config, &agents_config, name, project_path, force).await?;
-                let _ = logging::log(&self.db, Source::Mcp, None, "profile_activate", None, Some(project_path), "success", &format!("Activated '{}': {} placements", name, result.total_placements)).await;
-                Ok(format!("Activated '{}': {} skills, {} placements", result.profile_name, result.skills_placed, result.total_placements))
+                let result = skills_core::placements::activate(
+                    &self.dirs,
+                    &self.db,
+                    &profiles_config,
+                    &agents_config,
+                    name,
+                    project_path,
+                    force,
+                )
+                .await?;
+                let _ = logging::log(
+                    &self.db,
+                    LogEntry {
+                        source: Source::Mcp,
+                        agent_name: None,
+                        operation: "profile_activate",
+                        params: None,
+                        project_path: Some(project_path),
+                        result: "success",
+                        details: &format!(
+                            "Activated '{}': {} placements",
+                            name, result.total_placements
+                        ),
+                    },
+                )
+                .await;
+                Ok(format!(
+                    "Activated '{}': {} skills, {} placements",
+                    result.profile_name, result.skills_placed, result.total_placements
+                ))
             }
             "deactivate_profile" => {
                 let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                let project_path = args.get("project_path").and_then(|v| v.as_str()).unwrap_or("");
-                let result = skills_core::placements::deactivate(&self.db, name, project_path).await?;
-                let _ = logging::log(&self.db, Source::Mcp, None, "profile_deactivate", None, Some(project_path), "success", &format!("Deactivated '{}'", name)).await;
-                Ok(format!("Deactivated '{}': {} removed, {} kept", result.profile_name, result.files_removed, result.files_kept))
+                let project_path = args
+                    .get("project_path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let result =
+                    skills_core::placements::deactivate(&self.db, name, project_path).await?;
+                let _ = logging::log(
+                    &self.db,
+                    LogEntry {
+                        source: Source::Mcp,
+                        agent_name: None,
+                        operation: "profile_deactivate",
+                        params: None,
+                        project_path: Some(project_path),
+                        result: "success",
+                        details: &format!("Deactivated '{}'", name),
+                    },
+                )
+                .await;
+                Ok(format!(
+                    "Deactivated '{}': {} removed, {} kept",
+                    result.profile_name, result.files_removed, result.files_kept
+                ))
             }
             "get_status" => {
-                let project_path = args.get("project_path").and_then(|v| v.as_str()).unwrap_or("");
+                let project_path = args
+                    .get("project_path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 let profiles_config = ProfilesConfig::load(&self.dirs.profiles_toml())?;
-                let s = skills_core::placements::status(&self.db, &profiles_config, project_path).await?;
+                let s = skills_core::placements::status(&self.db, &profiles_config, project_path)
+                    .await?;
                 Ok(serde_json::to_string_pretty(&json!({
                     "project_path": s.project_path,
                     "base_skills": s.base_skills,

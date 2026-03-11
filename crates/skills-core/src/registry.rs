@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
@@ -107,14 +107,21 @@ impl Registry {
         // Record in sources.toml as local
         let mut sources = SourcesConfig::load(&self.dirs.sources_toml()).unwrap_or_default();
         let hash = compute_tree_hash(&skill_dir)?;
-        sources.skills.insert(name.to_string(), SkillSource {
-            source_type: SourceType::Local,
-            url: None,
-            path: None,
-            git_ref: None,
-            hash: Some(hash),
-            updated_at: Some(chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()),
-        });
+        sources.skills.insert(
+            name.to_string(),
+            SkillSource {
+                source_type: SourceType::Local,
+                url: None,
+                path: None,
+                git_ref: None,
+                hash: Some(hash),
+                updated_at: Some(
+                    chrono::Utc::now()
+                        .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+                        .to_string(),
+                ),
+            },
+        );
         sources.save(&self.dirs.sources_toml())?;
 
         Ok(skill_dir)
@@ -158,14 +165,21 @@ impl Registry {
 
         let hash = compute_tree_hash(&dest)?;
         let mut sources = SourcesConfig::load(&self.dirs.sources_toml()).unwrap_or_default();
-        sources.skills.insert(name.clone(), SkillSource {
-            source_type: SourceType::Local,
-            url: None,
-            path: None,
-            git_ref: None,
-            hash: Some(hash),
-            updated_at: Some(chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()),
-        });
+        sources.skills.insert(
+            name.clone(),
+            SkillSource {
+                source_type: SourceType::Local,
+                url: None,
+                path: None,
+                git_ref: None,
+                hash: Some(hash),
+                updated_at: Some(
+                    chrono::Utc::now()
+                        .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+                        .to_string(),
+                ),
+            },
+        );
         sources.save(&self.dirs.sources_toml())?;
 
         Ok(name)
@@ -337,7 +351,11 @@ mod tests {
         let tmp_src = TempDir::new().unwrap();
         let skill_dir = tmp_src.path().join("imported-skill");
         std::fs::create_dir_all(&skill_dir).unwrap();
-        std::fs::write(skill_dir.join("SKILL.md"), "---\nname: imported-skill\ndescription: Imported\n---\nContent").unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: imported-skill\ndescription: Imported\n---\nContent",
+        )
+        .unwrap();
 
         let (_tmp, reg) = setup_test_registry();
         let name = reg.add_from_local(&skill_dir).unwrap();
@@ -356,6 +374,9 @@ mod tests {
 
         copy_dir_recursive(&src, &dst).unwrap();
         assert_eq!(std::fs::read_to_string(dst.join("a.txt")).unwrap(), "hello");
-        assert_eq!(std::fs::read_to_string(dst.join("sub").join("b.txt")).unwrap(), "world");
+        assert_eq!(
+            std::fs::read_to_string(dst.join("sub").join("b.txt")).unwrap(),
+            "world"
+        );
     }
 }

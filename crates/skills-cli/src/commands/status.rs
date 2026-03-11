@@ -1,7 +1,7 @@
 use anyhow::Result;
 use skills_core::config::ProfilesConfig;
-use skills_core::{AppDirs, Database};
 use skills_core::placements;
+use skills_core::{AppDirs, Database};
 
 pub async fn run(dirs: &AppDirs, db: &Database, project: Option<String>) -> Result<()> {
     let project_path = match project {

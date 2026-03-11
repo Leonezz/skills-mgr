@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use std::collections::{BTreeSet, HashSet};
 
 use crate::config::ProfilesConfig;
@@ -93,7 +93,13 @@ pub fn validate_no_cycles(config: &ProfilesConfig) -> Result<()> {
     for profile_name in config.profiles.keys() {
         let mut visited = HashSet::new();
         let mut path = Vec::new();
-        resolve_recursive(config, profile_name, &mut BTreeSet::new(), &mut visited, &mut path)?;
+        resolve_recursive(
+            config,
+            profile_name,
+            &mut BTreeSet::new(),
+            &mut visited,
+            &mut path,
+        )?;
     }
     Ok(())
 }
@@ -128,24 +134,35 @@ mod tests {
 
     fn make_config() -> ProfilesConfig {
         let mut profiles = BTreeMap::new();
-        profiles.insert("rust".into(), ProfileDef {
-            description: Some("Rust".into()),
-            skills: vec!["rust-engineer".into(), "cargo-patterns".into()],
-            includes: vec![],
-        });
-        profiles.insert("react".into(), ProfileDef {
-            description: Some("React".into()),
-            skills: vec!["react-specialist".into()],
-            includes: vec![],
-        });
-        profiles.insert("rust-react".into(), ProfileDef {
-            description: Some("Full-stack".into()),
-            skills: vec!["api-design".into()],
-            includes: vec!["rust".into(), "react".into()],
-        });
+        profiles.insert(
+            "rust".into(),
+            ProfileDef {
+                description: Some("Rust".into()),
+                skills: vec!["rust-engineer".into(), "cargo-patterns".into()],
+                includes: vec![],
+            },
+        );
+        profiles.insert(
+            "react".into(),
+            ProfileDef {
+                description: Some("React".into()),
+                skills: vec!["react-specialist".into()],
+                includes: vec![],
+            },
+        );
+        profiles.insert(
+            "rust-react".into(),
+            ProfileDef {
+                description: Some("Full-stack".into()),
+                skills: vec!["api-design".into()],
+                includes: vec!["rust".into(), "react".into()],
+            },
+        );
 
         ProfilesConfig {
-            base: BaseConfig { skills: vec!["code-review".into(), "obsidian".into()] },
+            base: BaseConfig {
+                skills: vec!["code-review".into(), "obsidian".into()],
+            },
             profiles,
         }
     }
@@ -188,16 +205,22 @@ mod tests {
     #[test]
     fn test_circular_include_detected() {
         let mut profiles = BTreeMap::new();
-        profiles.insert("a".into(), ProfileDef {
-            description: None,
-            skills: vec!["s1".into()],
-            includes: vec!["b".into()],
-        });
-        profiles.insert("b".into(), ProfileDef {
-            description: None,
-            skills: vec!["s2".into()],
-            includes: vec!["a".into()],
-        });
+        profiles.insert(
+            "a".into(),
+            ProfileDef {
+                description: None,
+                skills: vec!["s1".into()],
+                includes: vec!["b".into()],
+            },
+        );
+        profiles.insert(
+            "b".into(),
+            ProfileDef {
+                description: None,
+                skills: vec!["s2".into()],
+                includes: vec!["a".into()],
+            },
+        );
         let config = ProfilesConfig {
             base: BaseConfig::default(),
             profiles,
@@ -232,7 +255,11 @@ mod tests {
     #[test]
     fn test_validate_skills_exist() {
         let config = make_config();
-        let registry = vec!["code-review".into(), "obsidian".into(), "rust-engineer".into()];
+        let registry = vec![
+            "code-review".into(),
+            "obsidian".into(),
+            "rust-engineer".into(),
+        ];
         let missing = validate_skills_exist(&config, &registry);
         assert!(missing.contains(&"cargo-patterns".to_string()));
         assert!(missing.contains(&"react-specialist".to_string()));
@@ -242,22 +269,34 @@ mod tests {
     #[test]
     fn test_transitive_three_levels() {
         let mut profiles = BTreeMap::new();
-        profiles.insert("c".into(), ProfileDef {
-            description: None,
-            skills: vec!["s3".into()],
-            includes: vec![],
-        });
-        profiles.insert("b".into(), ProfileDef {
-            description: None,
-            skills: vec!["s2".into()],
-            includes: vec!["c".into()],
-        });
-        profiles.insert("a".into(), ProfileDef {
-            description: None,
-            skills: vec!["s1".into()],
-            includes: vec!["b".into()],
-        });
-        let config = ProfilesConfig { base: BaseConfig::default(), profiles };
+        profiles.insert(
+            "c".into(),
+            ProfileDef {
+                description: None,
+                skills: vec!["s3".into()],
+                includes: vec![],
+            },
+        );
+        profiles.insert(
+            "b".into(),
+            ProfileDef {
+                description: None,
+                skills: vec!["s2".into()],
+                includes: vec!["c".into()],
+            },
+        );
+        profiles.insert(
+            "a".into(),
+            ProfileDef {
+                description: None,
+                skills: vec!["s1".into()],
+                includes: vec!["b".into()],
+            },
+        );
+        let config = ProfilesConfig {
+            base: BaseConfig::default(),
+            profiles,
+        };
         let skills = resolve_profile(&config, "a", false).unwrap();
         assert!(skills.contains(&"s1".to_string()));
         assert!(skills.contains(&"s2".to_string()));

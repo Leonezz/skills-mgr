@@ -1,11 +1,11 @@
 mod commands;
 
-use clap::{Parser, Subcommand};
 use anyhow::Result;
+use clap::{Parser, Subcommand};
 use skills_core::config::ProfilesConfig;
+use skills_core::profiles;
 use skills_core::registry::compute_tree_hash;
 use skills_core::{AppDirs, Database, Registry};
-use skills_core::profiles;
 
 #[derive(Parser)]
 #[command(name = "skills-mgr", about = "Cross-agent skill management tool")]
@@ -65,13 +65,31 @@ enum Commands {
 #[derive(Subcommand)]
 pub enum SkillAction {
     List,
-    Add { source: String },
-    Remove { name: String },
-    Update { name: Option<String>, #[arg(long)] all: bool },
-    Info { name: String },
-    Create { name: String, #[arg(long)] description: Option<String> },
-    Open { name: String },
-    Files { name: String },
+    Add {
+        source: String,
+    },
+    Remove {
+        name: String,
+    },
+    Update {
+        name: Option<String>,
+        #[arg(long)]
+        all: bool,
+    },
+    Info {
+        name: String,
+    },
+    Create {
+        name: String,
+        #[arg(long)]
+        description: Option<String>,
+    },
+    Open {
+        name: String,
+    },
+    Files {
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -84,8 +102,12 @@ pub enum ProfileAction {
         #[arg(long, value_delimiter = ',')]
         include: Vec<String>,
     },
-    Delete { name: String },
-    Show { name: String },
+    Delete {
+        name: String,
+    },
+    Show {
+        name: String,
+    },
     Edit {
         name: String,
         #[arg(long, value_delimiter = ',')]
@@ -128,7 +150,9 @@ pub enum AgentAction {
         #[arg(long)]
         global_path: String,
     },
-    Remove { name: String },
+    Remove {
+        name: String,
+    },
     Enable {
         name: String,
         #[arg(long)]
@@ -156,7 +180,11 @@ async fn main() -> Result<()> {
         Commands::Profile { action } => commands::profile::run(&dirs, &db, action).await?,
         Commands::Agent { action } => commands::agent::run(&dirs, &db, action).await?,
         Commands::Status { project } => commands::status::run(&dirs, &db, project).await?,
-        Commands::Log { project: _, source: _, limit } => {
+        Commands::Log {
+            project: _,
+            source: _,
+            limit,
+        } => {
             commands::util::show_log(&db, limit).await?;
         }
         Commands::CheckConflicts { project } => {
@@ -199,21 +227,30 @@ async fn run_check_conflicts(dirs: &AppDirs, db: &Database, project: Option<Stri
     }
 
     // Check for overlapping skills across active profiles
-    let mut skill_sources: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+    let mut skill_sources: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
     for profile_name in &active {
         if let Ok(skills) = profiles::resolve_profile(&profiles_config, profile_name, false) {
             for skill in skills {
-                skill_sources.entry(skill).or_default().push(profile_name.clone());
+                skill_sources
+                    .entry(skill)
+                    .or_default()
+                    .push(profile_name.clone());
             }
         }
     }
 
-    let overlaps: Vec<_> = skill_sources.iter()
+    let overlaps: Vec<_> = skill_sources
+        .iter()
         .filter(|(_, sources)| sources.len() > 1)
         .collect();
 
     if overlaps.is_empty() && missing.is_empty() {
-        println!("No conflicts found for {} ({} active profiles)", project_path, active.len());
+        println!(
+            "No conflicts found for {} ({} active profiles)",
+            project_path,
+            active.len()
+        );
     } else if !overlaps.is_empty() {
         println!("\nShared skills across profiles (not necessarily conflicts):");
         for (skill, sources) in &overlaps {
@@ -237,7 +274,10 @@ async fn run_doctor(dirs: &AppDirs, _db: &Database) -> Result<()> {
             if let Some(stored_hash) = &source.hash {
                 let actual_hash = compute_tree_hash(&skill.dir_path)?;
                 if *stored_hash != actual_hash {
-                    println!("  MISMATCH: {} — stored hash differs from content", skill.name);
+                    println!(
+                        "  MISMATCH: {} — stored hash differs from content",
+                        skill.name
+                    );
                     println!("    stored:  {}", stored_hash);
                     println!("    actual:  {}", actual_hash);
                     issues += 1;
@@ -252,7 +292,10 @@ async fn run_doctor(dirs: &AppDirs, _db: &Database) -> Result<()> {
     // 2. Check sources.toml references exist
     for name in sources.skills.keys() {
         if !registry.exists(name) {
-            println!("  ORPHAN SOURCE: {} — in sources.toml but not in registry", name);
+            println!(
+                "  ORPHAN SOURCE: {} — in sources.toml but not in registry",
+                name
+            );
             issues += 1;
         }
     }
@@ -263,7 +306,10 @@ async fn run_doctor(dirs: &AppDirs, _db: &Database) -> Result<()> {
     let registry_names: Vec<String> = skills.iter().map(|s| s.name.clone()).collect();
     let missing = profiles::validate_skills_exist(&profiles_config, &registry_names);
     for m in &missing {
-        println!("  MISSING SKILL: {} — referenced in profile but not in registry", m);
+        println!(
+            "  MISSING SKILL: {} — referenced in profile but not in registry",
+            m
+        );
         issues += 1;
     }
 
@@ -307,21 +353,30 @@ fn run_budget(dirs: &AppDirs, profile: Option<String>, project: Option<String>) 
         let mut skill_bytes: u64 = 0;
         let mut skill_files = 0;
         for entry in walkdir(&skill_dir) {
-            if let Ok(meta) = std::fs::metadata(&entry) {
-                if meta.is_file() {
-                    skill_bytes += meta.len();
-                    skill_files += 1;
-                }
+            if let Ok(meta) = std::fs::metadata(&entry)
+                && meta.is_file()
+            {
+                skill_bytes += meta.len();
+                skill_files += 1;
             }
         }
         let est_tokens = skill_bytes / 4; // rough: ~4 bytes per token
-        println!("  {} — {} files, {} bytes (~{} tokens)", skill_name, skill_files, skill_bytes, est_tokens);
+        println!(
+            "  {} — {} files, {} bytes (~{} tokens)",
+            skill_name, skill_files, skill_bytes, est_tokens
+        );
         total_bytes += skill_bytes;
         total_files += skill_files;
     }
 
     let total_tokens = total_bytes / 4;
-    println!("\nTotal: {} skills, {} files, {} bytes (~{} tokens)", skills_to_budget.len(), total_files, total_bytes, total_tokens);
+    println!(
+        "\nTotal: {} skills, {} files, {} bytes (~{} tokens)",
+        skills_to_budget.len(),
+        total_files,
+        total_bytes,
+        total_tokens
+    );
     if let Some(p) = &profile {
         println!("Profile: {}", p);
     }

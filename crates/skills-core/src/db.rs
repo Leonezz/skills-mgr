@@ -64,10 +64,11 @@ impl Database {
             std::fs::create_dir_all(parent)?;
         }
 
-        let options = SqliteConnectOptions::from_str(&format!("sqlite:{}?mode=rwc", path.display()))?
-            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
-            .busy_timeout(std::time::Duration::from_secs(5))
-            .pragma("foreign_keys", "ON");
+        let options =
+            SqliteConnectOptions::from_str(&format!("sqlite:{}?mode=rwc", path.display()))?
+                .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+                .busy_timeout(std::time::Duration::from_secs(5))
+                .pragma("foreign_keys", "ON");
 
         let pool = SqlitePoolOptions::new()
             .max_connections(5)
@@ -107,30 +108,27 @@ impl Database {
     // --- Projects ---
 
     pub async fn get_or_create_project(&self, path: &str, name: Option<&str>) -> Result<i64> {
-        let existing: Option<(i64,)> = sqlx::query_as(
-            "SELECT id FROM projects WHERE path = ?",
-        )
-        .bind(path)
-        .fetch_optional(&self.pool)
-        .await?;
+        let existing: Option<(i64,)> = sqlx::query_as("SELECT id FROM projects WHERE path = ?")
+            .bind(path)
+            .fetch_optional(&self.pool)
+            .await?;
 
         if let Some((id,)) = existing {
             return Ok(id);
         }
 
-        let result = sqlx::query(
-            "INSERT INTO projects (path, name) VALUES (?, ?)",
-        )
-        .bind(path)
-        .bind(name)
-        .execute(&self.pool)
-        .await?;
+        let result = sqlx::query("INSERT INTO projects (path, name) VALUES (?, ?)")
+            .bind(path)
+            .bind(name)
+            .execute(&self.pool)
+            .await?;
 
         Ok(result.last_insert_rowid())
     }
 
     // --- Operation Log ---
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn log_operation(
         &self,
         source: &str,
@@ -141,7 +139,9 @@ impl Database {
         result: &str,
         details: Option<&str>,
     ) -> Result<()> {
-        let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+        let now = chrono::Utc::now()
+            .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+            .to_string();
         sqlx::query(
             "INSERT INTO operation_log (timestamp, source, agent_name, operation, params, project_path, result, details)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -179,7 +179,9 @@ impl Database {
         agent_name: &str,
         target_path: &str,
     ) -> Result<i64> {
-        let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+        let now = chrono::Utc::now()
+            .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+            .to_string();
         let result = sqlx::query(
             "INSERT INTO placements (project_id, skill_name, agent_name, target_path, placed_at)
              VALUES (?, ?, ?, ?, ?)
@@ -197,7 +199,11 @@ impl Database {
         Ok(sqlx::Row::get::<i64, _>(&result, 0))
     }
 
-    pub async fn link_placement_profile(&self, placement_id: i64, profile_name: &str) -> Result<()> {
+    pub async fn link_placement_profile(
+        &self,
+        placement_id: i64,
+        profile_name: &str,
+    ) -> Result<()> {
         sqlx::query(
             "INSERT OR IGNORE INTO placement_profiles (placement_id, profile_name) VALUES (?, ?)",
         )
@@ -208,24 +214,25 @@ impl Database {
         Ok(())
     }
 
-    pub async fn unlink_placement_profile(&self, placement_id: i64, profile_name: &str) -> Result<()> {
-        sqlx::query(
-            "DELETE FROM placement_profiles WHERE placement_id = ? AND profile_name = ?",
-        )
-        .bind(placement_id)
-        .bind(profile_name)
-        .execute(&self.pool)
-        .await?;
+    pub async fn unlink_placement_profile(
+        &self,
+        placement_id: i64,
+        profile_name: &str,
+    ) -> Result<()> {
+        sqlx::query("DELETE FROM placement_profiles WHERE placement_id = ? AND profile_name = ?")
+            .bind(placement_id)
+            .bind(profile_name)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
     pub async fn get_placement_profile_count(&self, placement_id: i64) -> Result<i64> {
-        let row: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM placement_profiles WHERE placement_id = ?",
-        )
-        .bind(placement_id)
-        .fetch_one(&self.pool)
-        .await?;
+        let row: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM placement_profiles WHERE placement_id = ?")
+                .bind(placement_id)
+                .fetch_one(&self.pool)
+                .await?;
         Ok(row.0)
     }
 
@@ -255,7 +262,10 @@ impl Database {
         Ok(rows)
     }
 
-    pub async fn get_all_placements_for_project(&self, project_id: i64) -> Result<Vec<PlacementRow>> {
+    pub async fn get_all_placements_for_project(
+        &self,
+        project_id: i64,
+    ) -> Result<Vec<PlacementRow>> {
         let rows = sqlx::query_as::<_, PlacementRow>(
             "SELECT id, project_id, skill_name, agent_name, target_path, placed_at
              FROM placements WHERE project_id = ?",
@@ -277,7 +287,11 @@ impl Database {
         Ok(rows)
     }
 
-    pub async fn find_conflict(&self, project_id: i64, target_path: &str) -> Result<Option<PlacementRow>> {
+    pub async fn find_conflict(
+        &self,
+        project_id: i64,
+        target_path: &str,
+    ) -> Result<Option<PlacementRow>> {
         let row = sqlx::query_as::<_, PlacementRow>(
             "SELECT id, project_id, skill_name, agent_name, target_path, placed_at
              FROM placements WHERE project_id = ? AND target_path = ?",
@@ -291,8 +305,14 @@ impl Database {
 
     // --- Project Profiles ---
 
-    pub async fn activate_project_profile(&self, project_id: i64, profile_name: &str) -> Result<()> {
-        let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+    pub async fn activate_project_profile(
+        &self,
+        project_id: i64,
+        profile_name: &str,
+    ) -> Result<()> {
+        let now = chrono::Utc::now()
+            .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+            .to_string();
         sqlx::query(
             "INSERT OR IGNORE INTO project_profiles (project_id, profile_name, activated_at) VALUES (?, ?, ?)",
         )
@@ -304,20 +324,27 @@ impl Database {
         Ok(())
     }
 
-    pub async fn deactivate_project_profile(&self, project_id: i64, profile_name: &str) -> Result<()> {
-        sqlx::query(
-            "DELETE FROM project_profiles WHERE project_id = ? AND profile_name = ?",
-        )
-        .bind(project_id)
-        .bind(profile_name)
-        .execute(&self.pool)
-        .await?;
+    pub async fn deactivate_project_profile(
+        &self,
+        project_id: i64,
+        profile_name: &str,
+    ) -> Result<()> {
+        sqlx::query("DELETE FROM project_profiles WHERE project_id = ? AND profile_name = ?")
+            .bind(project_id)
+            .bind(profile_name)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
     // --- Project Agents ---
 
-    pub async fn set_agent_enabled(&self, project_id: i64, agent_name: &str, enabled: bool) -> Result<()> {
+    pub async fn set_agent_enabled(
+        &self,
+        project_id: i64,
+        agent_name: &str,
+        enabled: bool,
+    ) -> Result<()> {
         sqlx::query(
             "INSERT INTO project_agents (project_id, agent_name, enabled) VALUES (?, ?, ?)
              ON CONFLICT (project_id, agent_name) DO UPDATE SET enabled = excluded.enabled",
@@ -388,18 +415,34 @@ mod tests {
     #[tokio::test]
     async fn test_create_project() {
         let db = Database::open_memory().await.unwrap();
-        let id = db.get_or_create_project("/tmp/my-project", Some("my-project")).await.unwrap();
+        let id = db
+            .get_or_create_project("/tmp/my-project", Some("my-project"))
+            .await
+            .unwrap();
         assert!(id > 0);
 
         // Calling again returns same ID
-        let id2 = db.get_or_create_project("/tmp/my-project", None).await.unwrap();
+        let id2 = db
+            .get_or_create_project("/tmp/my-project", None)
+            .await
+            .unwrap();
         assert_eq!(id, id2);
     }
 
     #[tokio::test]
     async fn test_log_operation() {
         let db = Database::open_memory().await.unwrap();
-        db.log_operation("cli", None, "profile_activate", Some(r#"{"name":"rust"}"#), Some("/tmp/proj"), "success", Some("Activated")).await.unwrap();
+        db.log_operation(
+            "cli",
+            None,
+            "profile_activate",
+            Some(r#"{"name":"rust"}"#),
+            Some("/tmp/proj"),
+            "success",
+            Some("Activated"),
+        )
+        .await
+        .unwrap();
 
         let logs = db.get_recent_logs(10).await.unwrap();
         assert_eq!(logs.len(), 1);

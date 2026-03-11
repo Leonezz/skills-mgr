@@ -1,5 +1,5 @@
-use anyhow::Result;
 use crate::db::Database;
+use anyhow::Result;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Source {
@@ -18,24 +18,26 @@ impl Source {
     }
 }
 
-pub async fn log(
-    db: &Database,
-    source: Source,
-    agent_name: Option<&str>,
-    operation: &str,
-    params: Option<&serde_json::Value>,
-    project_path: Option<&str>,
-    result: &str,
-    details: &str,
-) -> Result<()> {
-    let params_str = params.map(|p| p.to_string());
+pub struct LogEntry<'a> {
+    pub source: Source,
+    pub agent_name: Option<&'a str>,
+    pub operation: &'a str,
+    pub params: Option<&'a serde_json::Value>,
+    pub project_path: Option<&'a str>,
+    pub result: &'a str,
+    pub details: &'a str,
+}
+
+pub async fn log(db: &Database, entry: LogEntry<'_>) -> Result<()> {
+    let params_str = entry.params.map(|p| p.to_string());
     db.log_operation(
-        source.as_str(),
-        agent_name,
-        operation,
+        entry.source.as_str(),
+        entry.agent_name,
+        entry.operation,
         params_str.as_deref(),
-        project_path,
-        result,
-        Some(details),
-    ).await
+        entry.project_path,
+        entry.result,
+        Some(entry.details),
+    )
+    .await
 }

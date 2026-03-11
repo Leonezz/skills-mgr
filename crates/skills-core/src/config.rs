@@ -1,6 +1,6 @@
-use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 /// Root directory structure for skills-mgr.
 /// All paths derived from a single base directory (default: ~/.skills-mgr/).
@@ -19,14 +19,30 @@ impl AppDirs {
         Ok(home.join(".skills-mgr"))
     }
 
-    pub fn base(&self) -> &Path { &self.base }
-    pub fn registry(&self) -> PathBuf { self.base.join("registry") }
-    pub fn sources_toml(&self) -> PathBuf { self.base.join("sources.toml") }
-    pub fn profiles_toml(&self) -> PathBuf { self.base.join("profiles.toml") }
-    pub fn agents_toml(&self) -> PathBuf { self.base.join("agents.toml") }
-    pub fn local(&self) -> PathBuf { self.base.join("local") }
-    pub fn database(&self) -> PathBuf { self.base.join("local").join("skills-mgr.db") }
-    pub fn cache(&self) -> PathBuf { self.base.join("local").join("cache") }
+    pub fn base(&self) -> &Path {
+        &self.base
+    }
+    pub fn registry(&self) -> PathBuf {
+        self.base.join("registry")
+    }
+    pub fn sources_toml(&self) -> PathBuf {
+        self.base.join("sources.toml")
+    }
+    pub fn profiles_toml(&self) -> PathBuf {
+        self.base.join("profiles.toml")
+    }
+    pub fn agents_toml(&self) -> PathBuf {
+        self.base.join("agents.toml")
+    }
+    pub fn local(&self) -> PathBuf {
+        self.base.join("local")
+    }
+    pub fn database(&self) -> PathBuf {
+        self.base.join("local").join("skills-mgr.db")
+    }
+    pub fn cache(&self) -> PathBuf {
+        self.base.join("local").join("cache")
+    }
 
     /// Ensure all required directories exist.
     pub fn ensure_dirs(&self) -> Result<()> {
@@ -45,7 +61,10 @@ fn ensure_teaching_skill(dirs: &AppDirs) -> Result<()> {
         return Ok(());
     }
     std::fs::create_dir_all(&skill_dir)?;
-    std::fs::write(skill_dir.join("SKILL.md"), include_str!("../assets/skills-mgr-guide.md"))?;
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        include_str!("../assets/skills-mgr-guide.md"),
+    )?;
     Ok(())
 }
 
@@ -119,8 +138,7 @@ impl SourcesConfig {
         }
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read {}", path.display()))?;
-        toml::from_str(&content)
-            .with_context(|| format!("Failed to parse {}", path.display()))
+        toml::from_str(&content).with_context(|| format!("Failed to parse {}", path.display()))
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
@@ -137,8 +155,7 @@ impl ProfilesConfig {
         }
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read {}", path.display()))?;
-        toml::from_str(&content)
-            .with_context(|| format!("Failed to parse {}", path.display()))
+        toml::from_str(&content).with_context(|| format!("Failed to parse {}", path.display()))
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
@@ -155,8 +172,7 @@ impl AgentsConfig {
         }
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read {}", path.display()))?;
-        toml::from_str(&content)
-            .with_context(|| format!("Failed to parse {}", path.display()))
+        toml::from_str(&content).with_context(|| format!("Failed to parse {}", path.display()))
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
@@ -196,19 +212,27 @@ mod tests {
         let path = tmp.path().join("profiles.toml");
 
         let config = ProfilesConfig {
-            base: BaseConfig { skills: vec!["code-review".into(), "obsidian".into()] },
+            base: BaseConfig {
+                skills: vec!["code-review".into(), "obsidian".into()],
+            },
             profiles: {
                 let mut m = std::collections::BTreeMap::new();
-                m.insert("rust".into(), ProfileDef {
-                    description: Some("Rust development".into()),
-                    skills: vec!["rust-engineer".into()],
-                    includes: vec![],
-                });
-                m.insert("rust-react".into(), ProfileDef {
-                    description: Some("Full-stack".into()),
-                    skills: vec!["api-design".into()],
-                    includes: vec!["rust".into()],
-                });
+                m.insert(
+                    "rust".into(),
+                    ProfileDef {
+                        description: Some("Rust development".into()),
+                        skills: vec!["rust-engineer".into()],
+                        includes: vec![],
+                    },
+                );
+                m.insert(
+                    "rust-react".into(),
+                    ProfileDef {
+                        description: Some("Full-stack".into()),
+                        skills: vec!["api-design".into()],
+                        includes: vec!["rust".into()],
+                    },
+                );
                 m
             },
         };
@@ -227,14 +251,17 @@ mod tests {
         let config = SourcesConfig {
             skills: {
                 let mut m = std::collections::BTreeMap::new();
-                m.insert("rust-engineer".into(), SkillSource {
-                    source_type: SourceType::Git,
-                    url: Some("https://github.com/anthropics/skills".into()),
-                    path: Some("rust-engineer".into()),
-                    git_ref: Some("main".into()),
-                    hash: Some("sha256:abc123".into()),
-                    updated_at: Some("2026-03-10T12:00:00Z".into()),
-                });
+                m.insert(
+                    "rust-engineer".into(),
+                    SkillSource {
+                        source_type: SourceType::Git,
+                        url: Some("https://github.com/anthropics/skills".into()),
+                        path: Some("rust-engineer".into()),
+                        git_ref: Some("main".into()),
+                        hash: Some("sha256:abc123".into()),
+                        updated_at: Some("2026-03-10T12:00:00Z".into()),
+                    },
+                );
                 m
             },
         };
@@ -251,10 +278,13 @@ mod tests {
         let config = AgentsConfig {
             agents: {
                 let mut m = std::collections::BTreeMap::new();
-                m.insert("claude-code".into(), AgentDef {
-                    project_path: ".claude/skills".into(),
-                    global_path: "~/.claude/skills".into(),
-                });
+                m.insert(
+                    "claude-code".into(),
+                    AgentDef {
+                        project_path: ".claude/skills".into(),
+                        global_path: "~/.claude/skills".into(),
+                    },
+                );
                 m
             },
         };

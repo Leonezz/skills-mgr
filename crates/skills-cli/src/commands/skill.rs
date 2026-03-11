@@ -1,9 +1,9 @@
+use crate::SkillAction;
 use anyhow::Result;
 use skills_core::config::SourcesConfig;
-use skills_core::logging::{self, Source};
+use skills_core::logging::{self, LogEntry, Source};
 use skills_core::registry::compute_tree_hash;
 use skills_core::{AppDirs, Database, Registry};
-use crate::SkillAction;
 
 pub async fn run(dirs: &AppDirs, db: &Database, action: SkillAction) -> Result<()> {
     let registry = Registry::new(dirs.clone());
@@ -17,59 +17,100 @@ pub async fn run(dirs: &AppDirs, db: &Database, action: SkillAction) -> Result<(
             }
             for skill in &skills {
                 let desc = skill.description.as_deref().unwrap_or("(no description)");
-                let source_type = skill.source.as_ref()
+                let source_type = skill
+                    .source
+                    .as_ref()
                     .map(|s| format!("{:?}", s.source_type).to_lowercase())
                     .unwrap_or("unknown".into());
                 println!("  {} [{}] - {}", skill.name, source_type, desc);
             }
             println!("\n{} skills total", skills.len());
         }
-        SkillAction::Info { name } => {
-            match registry.get(&name)? {
-                Some(skill) => {
-                    println!("Name: {}", skill.name);
-                    println!("Description: {}", skill.description.as_deref().unwrap_or("(none)"));
-                    println!("Path: {}", skill.dir_path.display());
-                    println!("Files:");
-                    for f in &skill.files {
-                        println!("  {}", f);
+        SkillAction::Info { name } => match registry.get(&name)? {
+            Some(skill) => {
+                println!("Name: {}", skill.name);
+                println!(
+                    "Description: {}",
+                    skill.description.as_deref().unwrap_or("(none)")
+                );
+                println!("Path: {}", skill.dir_path.display());
+                println!("Files:");
+                for f in &skill.files {
+                    println!("  {}", f);
+                }
+                if let Some(src) = &skill.source {
+                    println!("Source: {:?}", src.source_type);
+                    if let Some(url) = &src.url {
+                        println!("URL: {}", url);
                     }
-                    if let Some(src) = &skill.source {
-                        println!("Source: {:?}", src.source_type);
-                        if let Some(url) = &src.url { println!("URL: {}", url); }
-                        if let Some(hash) = &src.hash { println!("Hash: {}", hash); }
+                    if let Some(hash) = &src.hash {
+                        println!("Hash: {}", hash);
                     }
                 }
-                None => println!("Skill '{}' not found in registry", name),
             }
-        }
+            None => println!("Skill '{}' not found in registry", name),
+        },
         SkillAction::Create { name, description } => {
             let desc = description.as_deref().unwrap_or("TODO: add description");
             let path = registry.create(&name, desc)?;
             println!("Created skill '{}' at {}", name, path.display());
-            logging::log(db, Source::Cli, None, "skill_create", None, None, "success", &format!("Created skill '{}'", name)).await?;
+            logging::log(
+                db,
+                LogEntry {
+                    source: Source::Cli,
+                    agent_name: None,
+                    operation: "skill_create",
+                    params: None,
+                    project_path: None,
+                    result: "success",
+                    details: &format!("Created skill '{}'", name),
+                },
+            )
+            .await?;
         }
         SkillAction::Remove { name } => {
             registry.remove(&name)?;
             println!("Removed skill '{}' from registry", name);
-            logging::log(db, Source::Cli, None, "skill_remove", None, None, "success", &format!("Removed skill '{}'", name)).await?;
+            logging::log(
+                db,
+                LogEntry {
+                    source: Source::Cli,
+                    agent_name: None,
+                    operation: "skill_remove",
+                    params: None,
+                    project_path: None,
+                    result: "success",
+                    details: &format!("Removed skill '{}'", name),
+                },
+            )
+            .await?;
         }
-        SkillAction::Files { name } => {
-            match registry.get(&name)? {
-                Some(skill) => {
-                    for f in &skill.files {
-                        println!("  {}", f);
-                    }
+        SkillAction::Files { name } => match registry.get(&name)? {
+            Some(skill) => {
+                for f in &skill.files {
+                    println!("  {}", f);
                 }
-                None => println!("Skill '{}' not found", name),
             }
-        }
+            None => println!("Skill '{}' not found", name),
+        },
         SkillAction::Add { source } => {
             let path = std::path::Path::new(&source);
             if path.exists() {
                 let name = registry.add_from_local(path)?;
                 println!("Added skill '{}' from local path", name);
-                logging::log(db, Source::Cli, None, "skill_add", None, None, "success", &format!("Added skill '{}' from local", name)).await?;
+                logging::log(
+                    db,
+                    LogEntry {
+                        source: Source::Cli,
+                        agent_name: None,
+                        operation: "skill_add",
+                        params: None,
+                        project_path: None,
+                        result: "success",
+                        details: &format!("Added skill '{}' from local", name),
+                    },
+                )
+                .await?;
             } else {
                 println!("Git-based skill import not yet implemented. Use a local path for now.");
             }
@@ -99,7 +140,11 @@ pub async fn run(dirs: &AppDirs, db: &Database, action: SkillAction) -> Result<(
                 } else {
                     if let Some(entry) = sources.skills.get_mut(skill_name) {
                         entry.hash = Some(new_hash);
-                        entry.updated_at = Some(chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string());
+                        entry.updated_at = Some(
+                            chrono::Utc::now()
+                                .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+                                .to_string(),
+                        );
                     }
                     println!("  {} — hash updated", skill_name);
                     updated += 1;
@@ -108,17 +153,27 @@ pub async fn run(dirs: &AppDirs, db: &Database, action: SkillAction) -> Result<(
             sources.save(&dirs.sources_toml())?;
             println!("\n{} skills updated", updated);
             if updated > 0 {
-                logging::log(db, Source::Cli, None, "skill_update", None, None, "success", &format!("Updated {} skills", updated)).await?;
+                logging::log(
+                    db,
+                    LogEntry {
+                        source: Source::Cli,
+                        agent_name: None,
+                        operation: "skill_update",
+                        params: None,
+                        project_path: None,
+                        result: "success",
+                        details: &format!("Updated {} skills", updated),
+                    },
+                )
+                .await?;
             }
         }
-        SkillAction::Open { name } => {
-            match registry.get(&name)? {
-                Some(skill) => {
-                    open::that(&skill.dir_path)?;
-                }
-                None => println!("Skill '{}' not found", name),
+        SkillAction::Open { name } => match registry.get(&name)? {
+            Some(skill) => {
+                open::that(&skill.dir_path)?;
             }
-        }
+            None => println!("Skill '{}' not found", name),
+        },
     }
 
     Ok(())

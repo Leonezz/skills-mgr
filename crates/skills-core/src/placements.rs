@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
 
 use crate::config::{AgentsConfig, AppDirs, ProfilesConfig};
@@ -46,7 +46,9 @@ pub async fn activate(
     let project_name = Path::new(project_path)
         .file_name()
         .map(|n| n.to_string_lossy().to_string());
-    let project_id = db.get_or_create_project(project_path, project_name.as_deref()).await?;
+    let project_id = db
+        .get_or_create_project(project_path, project_name.as_deref())
+        .await?;
 
     // Determine which agents to place into
     let agents: Vec<(String, String)> = agents_config
@@ -115,13 +117,13 @@ pub async fn activate(
         // Skip if already placed (same skill deduplicated)
         if dst.exists() {
             // Check if it's the same skill by seeing if we already placed it
-            if let Some(existing) = db.find_conflict(project_id, &p.target_path).await? {
-                if existing.skill_name == p.skill_name {
-                    // Just link the profile, don't re-copy
-                    let pid = existing.id;
-                    db.link_placement_profile(pid, profile_name).await?;
-                    continue;
-                }
+            if let Some(existing) = db.find_conflict(project_id, &p.target_path).await?
+                && existing.skill_name == p.skill_name
+            {
+                // Just link the profile, don't re-copy
+                let pid = existing.id;
+                db.link_placement_profile(pid, profile_name).await?;
+                continue;
             }
         }
 
@@ -130,19 +132,28 @@ pub async fn activate(
             for rollback_path in &placed_paths {
                 let _ = std::fs::remove_dir_all(rollback_path);
             }
-            bail!("Failed to copy skill '{}' to '{}': {}. All placements rolled back.", p.skill_name, p.target_path, e);
+            bail!(
+                "Failed to copy skill '{}' to '{}': {}. All placements rolled back.",
+                p.skill_name,
+                p.target_path,
+                e
+            );
         }
         placed_paths.push(dst);
     }
 
     // Record in DB
     for p in &planned {
-        let placement_id = db.insert_placement(project_id, &p.skill_name, &p.agent_name, &p.target_path).await?;
-        db.link_placement_profile(placement_id, profile_name).await?;
+        let placement_id = db
+            .insert_placement(project_id, &p.skill_name, &p.agent_name, &p.target_path)
+            .await?;
+        db.link_placement_profile(placement_id, profile_name)
+            .await?;
     }
 
     // Record active profile
-    db.activate_project_profile(project_id, profile_name).await?;
+    db.activate_project_profile(project_id, profile_name)
+        .await?;
 
     let agents_used: Vec<String> = agents.iter().map(|(n, _)| n.clone()).collect();
     Ok(ActivationResult {
@@ -165,13 +176,16 @@ pub async fn deactivate(
 ) -> Result<DeactivationResult> {
     let project_id = db.get_or_create_project(project_path, None).await?;
 
-    let placements = db.get_placements_for_project_profile(project_id, profile_name).await?;
+    let placements = db
+        .get_placements_for_project_profile(project_id, profile_name)
+        .await?;
 
     let mut files_removed = 0;
     let mut files_kept = 0;
 
     for placement in &placements {
-        db.unlink_placement_profile(placement.id, profile_name).await?;
+        db.unlink_placement_profile(placement.id, profile_name)
+            .await?;
         let remaining = db.get_placement_profile_count(placement.id).await?;
 
         if remaining == 0 {
@@ -187,7 +201,8 @@ pub async fn deactivate(
         }
     }
 
-    db.deactivate_project_profile(project_id, profile_name).await?;
+    db.deactivate_project_profile(project_id, profile_name)
+        .await?;
 
     Ok(DeactivationResult {
         profile_name: profile_name.to_string(),
@@ -237,29 +252,43 @@ mod tests {
         let db = Database::open_memory().await.unwrap();
 
         // Create test skills in registry
-        for name in &["code-review", "rust-engineer", "react-specialist", "api-design"] {
+        for name in &[
+            "code-review",
+            "rust-engineer",
+            "react-specialist",
+            "api-design",
+        ] {
             let skill_dir = dirs.registry().join(name);
             std::fs::create_dir_all(&skill_dir).unwrap();
             std::fs::write(
                 skill_dir.join("SKILL.md"),
                 format!("---\nname: {}\ndescription: Test skill\n---\nContent", name),
-            ).unwrap();
+            )
+            .unwrap();
         }
 
         let profiles_config = ProfilesConfig {
-            base: BaseConfig { skills: vec!["code-review".into()] },
+            base: BaseConfig {
+                skills: vec!["code-review".into()],
+            },
             profiles: {
                 let mut m = BTreeMap::new();
-                m.insert("rust".into(), ProfileDef {
-                    description: Some("Rust".into()),
-                    skills: vec!["rust-engineer".into()],
-                    includes: vec![],
-                });
-                m.insert("react".into(), ProfileDef {
-                    description: Some("React".into()),
-                    skills: vec!["react-specialist".into()],
-                    includes: vec![],
-                });
+                m.insert(
+                    "rust".into(),
+                    ProfileDef {
+                        description: Some("Rust".into()),
+                        skills: vec!["rust-engineer".into()],
+                        includes: vec![],
+                    },
+                );
+                m.insert(
+                    "react".into(),
+                    ProfileDef {
+                        description: Some("React".into()),
+                        skills: vec!["react-specialist".into()],
+                        includes: vec![],
+                    },
+                );
                 m
             },
         };
@@ -267,10 +296,13 @@ mod tests {
         let agents_config = AgentsConfig {
             agents: {
                 let mut m = BTreeMap::new();
-                m.insert("test-agent".into(), AgentDef {
-                    project_path: ".test-agent/skills".into(),
-                    global_path: "~/.test-agent/skills".into(),
-                });
+                m.insert(
+                    "test-agent".into(),
+                    AgentDef {
+                        project_path: ".test-agent/skills".into(),
+                        global_path: "~/.test-agent/skills".into(),
+                    },
+                );
                 m
             },
         };
@@ -284,13 +316,31 @@ mod tests {
         let project_path = tmp.path().join("my-project");
         std::fs::create_dir_all(&project_path).unwrap();
 
-        let result = activate(&dirs, &db, &profiles, &agents, "rust", &project_path.to_string_lossy(), false).await.unwrap();
+        let result = activate(
+            &dirs,
+            &db,
+            &profiles,
+            &agents,
+            "rust",
+            &project_path.to_string_lossy(),
+            false,
+        )
+        .await
+        .unwrap();
         assert_eq!(result.profile_name, "rust");
         assert_eq!(result.skills_placed, 2); // code-review (base) + rust-engineer
 
         // Verify files were placed
-        assert!(project_path.join(".test-agent/skills/rust-engineer/SKILL.md").exists());
-        assert!(project_path.join(".test-agent/skills/code-review/SKILL.md").exists());
+        assert!(
+            project_path
+                .join(".test-agent/skills/rust-engineer/SKILL.md")
+                .exists()
+        );
+        assert!(
+            project_path
+                .join(".test-agent/skills/code-review/SKILL.md")
+                .exists()
+        );
     }
 
     #[tokio::test]
@@ -299,12 +349,28 @@ mod tests {
         let project_path = tmp.path().join("my-project");
         std::fs::create_dir_all(&project_path).unwrap();
 
-        activate(&dirs, &db, &profiles, &agents, "rust", &project_path.to_string_lossy(), false).await.unwrap();
-        let result = deactivate(&db, "rust", &project_path.to_string_lossy()).await.unwrap();
+        activate(
+            &dirs,
+            &db,
+            &profiles,
+            &agents,
+            "rust",
+            &project_path.to_string_lossy(),
+            false,
+        )
+        .await
+        .unwrap();
+        let result = deactivate(&db, "rust", &project_path.to_string_lossy())
+            .await
+            .unwrap();
 
         assert!(result.files_removed > 0);
         // Verify files were removed
-        assert!(!project_path.join(".test-agent/skills/rust-engineer/SKILL.md").exists());
+        assert!(
+            !project_path
+                .join(".test-agent/skills/rust-engineer/SKILL.md")
+                .exists()
+        );
     }
 
     #[tokio::test]
@@ -314,14 +380,44 @@ mod tests {
         std::fs::create_dir_all(&project_path).unwrap();
 
         // Both rust and react profiles share base "code-review"
-        activate(&dirs, &db, &profiles, &agents, "rust", &project_path.to_string_lossy(), false).await.unwrap();
-        activate(&dirs, &db, &profiles, &agents, "react", &project_path.to_string_lossy(), false).await.unwrap();
+        activate(
+            &dirs,
+            &db,
+            &profiles,
+            &agents,
+            "rust",
+            &project_path.to_string_lossy(),
+            false,
+        )
+        .await
+        .unwrap();
+        activate(
+            &dirs,
+            &db,
+            &profiles,
+            &agents,
+            "react",
+            &project_path.to_string_lossy(),
+            false,
+        )
+        .await
+        .unwrap();
 
         // Deactivate rust — code-review should remain (still used by react)
-        let result = deactivate(&db, "rust", &project_path.to_string_lossy()).await.unwrap();
+        let result = deactivate(&db, "rust", &project_path.to_string_lossy())
+            .await
+            .unwrap();
         assert!(result.files_kept > 0); // code-review kept
-        assert!(project_path.join(".test-agent/skills/code-review/SKILL.md").exists());
-        assert!(!project_path.join(".test-agent/skills/rust-engineer/SKILL.md").exists());
+        assert!(
+            project_path
+                .join(".test-agent/skills/code-review/SKILL.md")
+                .exists()
+        );
+        assert!(
+            !project_path
+                .join(".test-agent/skills/rust-engineer/SKILL.md")
+                .exists()
+        );
     }
 
     #[tokio::test]
@@ -330,9 +426,21 @@ mod tests {
         let project_path = tmp.path().join("my-project");
         std::fs::create_dir_all(&project_path).unwrap();
 
-        activate(&dirs, &db, &profiles, &agents, "rust", &project_path.to_string_lossy(), false).await.unwrap();
+        activate(
+            &dirs,
+            &db,
+            &profiles,
+            &agents,
+            "rust",
+            &project_path.to_string_lossy(),
+            false,
+        )
+        .await
+        .unwrap();
 
-        let s = status(&db, &profiles, &project_path.to_string_lossy()).await.unwrap();
+        let s = status(&db, &profiles, &project_path.to_string_lossy())
+            .await
+            .unwrap();
         assert_eq!(s.active_profiles, vec!["rust"]);
         assert!(s.placement_count > 0);
     }

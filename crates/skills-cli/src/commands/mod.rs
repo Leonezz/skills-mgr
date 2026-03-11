@@ -1,5 +1,5 @@
-pub mod skill;
-pub mod profile;
 pub mod agent;
+pub mod profile;
+pub mod skill;
 pub mod status;
 pub mod util;

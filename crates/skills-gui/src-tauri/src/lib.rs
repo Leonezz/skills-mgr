@@ -9,7 +9,8 @@ pub fn run() {
     let (dirs, db) = rt.block_on(async {
         let base = AppDirs::default_base().expect("Failed to determine home directory");
         let dirs = AppDirs::new(base);
-        dirs.ensure_dirs().expect("Failed to create app directories");
+        dirs.ensure_dirs()
+            .expect("Failed to create app directories");
         let db = Database::open(&dirs.database())
             .await
             .expect("Failed to open database");
