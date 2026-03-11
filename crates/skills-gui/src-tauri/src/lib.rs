@@ -21,8 +21,16 @@ pub fn run() {
         .manage(AppState { dirs, db })
         .invoke_handler(tauri::generate_handler![
             commands::list_skills,
+            commands::create_skill,
+            commands::remove_skill,
             commands::list_profiles,
+            commands::create_profile,
+            commands::edit_profile,
+            commands::delete_profile,
             commands::list_agents,
+            commands::add_agent,
+            commands::edit_agent,
+            commands::remove_agent,
             commands::get_status,
             commands::activate_profile,
             commands::deactivate_profile,
