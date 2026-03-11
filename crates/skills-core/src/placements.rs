@@ -50,10 +50,11 @@ pub async fn activate(
         .get_or_create_project(project_path, project_name.as_deref())
         .await?;
 
-    // Determine which agents to place into
+    // Determine which agents to place into (skip disabled)
     let agents: Vec<(String, String)> = agents_config
         .agents
         .iter()
+        .filter(|(_, def)| def.enabled)
         .map(|(name, def)| (name.clone(), def.project_path.clone()))
         .collect();
 
@@ -301,6 +302,7 @@ mod tests {
                     AgentDef {
                         project_path: ".test-agent/skills".into(),
                         global_path: "~/.test-agent/skills".into(),
+                        enabled: true,
                     },
                 );
                 m

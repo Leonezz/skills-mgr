@@ -1,5 +1,5 @@
-use serde::Serialize;
-use skills_core::config::{AgentDef, AgentsConfig, ProfileDef, ProfilesConfig};
+use serde::{Deserialize, Serialize};
+use skills_core::config::{AgentDef, AgentsConfig, AppSettings, ProfileDef, ProfilesConfig};
 use skills_core::logging::{self, LogEntry, Source};
 use skills_core::placements;
 use skills_core::profiles;
@@ -17,6 +17,13 @@ pub struct SkillInfo {
     pub description: Option<String>,
     pub files: Vec<String>,
     pub source_type: Option<String>,
+    pub is_builtin: bool,
+}
+
+#[derive(Serialize)]
+pub struct ActiveProject {
+    pub path: String,
+    pub name: String,
 }
 
 #[derive(Serialize)]
@@ -25,6 +32,7 @@ pub struct ProfileInfo {
     pub description: Option<String>,
     pub skills: Vec<String>,
     pub includes: Vec<String>,
+    pub active_projects: Vec<ActiveProject>,
 }
 
 #[derive(Serialize)]
@@ -32,6 +40,7 @@ pub struct AgentInfo {
     pub name: String,
     pub project_path: String,
     pub global_path: String,
+    pub enabled: bool,
 }
 
 #[derive(Serialize)]
@@ -48,15 +57,20 @@ pub struct StatusInfo {
 pub async fn list_skills(state: State<'_, AppState>) -> Result<Vec<SkillInfo>, String> {
     let registry = Registry::new(state.dirs.clone());
     let skills = registry.list().map_err(|e| e.to_string())?;
+    const BUILTIN_SKILLS: &[&str] = &["skills-mgr-guide"];
     Ok(skills
         .into_iter()
-        .map(|s| SkillInfo {
-            name: s.name,
-            description: s.description,
-            files: s.files,
-            source_type: s
-                .source
-                .map(|src| format!("{:?}", src.source_type).to_lowercase()),
+        .map(|s| {
+            let is_builtin = BUILTIN_SKILLS.contains(&s.name.as_str());
+            SkillInfo {
+                name: s.name,
+                description: s.description,
+                files: s.files,
+                source_type: s
+                    .source
+                    .map(|src| format!("{:?}", src.source_type).to_lowercase()),
+                is_builtin,
+            }
         })
         .collect())
 }
@@ -89,6 +103,10 @@ pub async fn create_skill(
 
 #[tauri::command]
 pub async fn remove_skill(state: State<'_, AppState>, name: String) -> Result<String, String> {
+    const BUILTIN_SKILLS: &[&str] = &["skills-mgr-guide"];
+    if BUILTIN_SKILLS.contains(&name.as_str()) {
+        return Err(format!("Cannot delete built-in skill '{}'", name));
+    }
     let registry = Registry::new(state.dirs.clone());
     registry.remove(&name).map_err(|e| e.to_string())?;
     let _ = logging::log(
@@ -107,6 +125,66 @@ pub async fn remove_skill(state: State<'_, AppState>, name: String) -> Result<St
     Ok(format!("Removed skill '{}'", name))
 }
 
+#[tauri::command]
+pub async fn import_skill(
+    state: State<'_, AppState>,
+    source_path: String,
+) -> Result<String, String> {
+    let registry = Registry::new(state.dirs.clone());
+    let name = registry
+        .add_from_local(std::path::Path::new(&source_path))
+        .map_err(|e| e.to_string())?;
+    let _ = logging::log(
+        &state.db,
+        LogEntry {
+            source: Source::Gui,
+            agent_name: None,
+            operation: "skill_import",
+            params: None,
+            project_path: None,
+            result: "success",
+            details: &format!("Imported skill '{}' from {}", name, source_path),
+        },
+    )
+    .await;
+    Ok(format!("Imported skill '{}'", name))
+}
+
+#[tauri::command]
+pub async fn read_skill_content(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<String, String> {
+    let registry = Registry::new(state.dirs.clone());
+    registry.read_content(&name).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn update_skill(
+    state: State<'_, AppState>,
+    name: String,
+    description: String,
+) -> Result<String, String> {
+    let registry = Registry::new(state.dirs.clone());
+    registry
+        .update_description(&name, &description)
+        .map_err(|e| e.to_string())?;
+    let _ = logging::log(
+        &state.db,
+        LogEntry {
+            source: Source::Gui,
+            agent_name: None,
+            operation: "skill_update",
+            params: None,
+            project_path: None,
+            result: "success",
+            details: &format!("Updated skill '{}'", name),
+        },
+    )
+    .await;
+    Ok(format!("Updated skill '{}'", name))
+}
+
 // --- Profiles ---
 
 #[tauri::command]
@@ -114,11 +192,24 @@ pub async fn list_profiles(state: State<'_, AppState>) -> Result<serde_json::Val
     let config = ProfilesConfig::load(&state.dirs.profiles_toml()).map_err(|e| e.to_string())?;
     let mut result_profiles: Vec<ProfileInfo> = Vec::new();
     for (name, profile) in &config.profiles {
+        let projects = state
+            .db
+            .get_projects_for_profile(name)
+            .await
+            .unwrap_or_default();
+        let active_projects: Vec<ActiveProject> = projects
+            .into_iter()
+            .map(|(path, name)| {
+                let display = name.unwrap_or_else(|| path.clone());
+                ActiveProject { path, name: display }
+            })
+            .collect();
         result_profiles.push(ProfileInfo {
             name: name.clone(),
             description: profile.description.clone(),
             skills: profile.skills.clone(),
             includes: profile.includes.clone(),
+            active_projects,
         });
     }
     Ok(serde_json::json!({
@@ -250,6 +341,7 @@ pub async fn list_agents(state: State<'_, AppState>) -> Result<Vec<AgentInfo>, S
             name,
             project_path: def.project_path,
             global_path: def.global_path,
+            enabled: def.enabled,
         })
         .collect())
 }
@@ -267,6 +359,7 @@ pub async fn add_agent(
         AgentDef {
             project_path,
             global_path,
+            enabled: true,
         },
     );
     config
@@ -296,14 +389,17 @@ pub async fn edit_agent(
     global_path: String,
 ) -> Result<String, String> {
     let mut config = AgentsConfig::load(&state.dirs.agents_toml()).map_err(|e| e.to_string())?;
-    if !config.agents.contains_key(&name) {
-        return Err(format!("Agent '{}' not found", name));
-    }
+    let existing = config
+        .agents
+        .get(&name)
+        .ok_or_else(|| format!("Agent '{}' not found", name))?;
+    let enabled = existing.enabled;
     config.agents.insert(
         name.clone(),
         AgentDef {
             project_path,
             global_path,
+            enabled,
         },
     );
     config
@@ -348,6 +444,38 @@ pub async fn remove_agent(state: State<'_, AppState>, name: String) -> Result<St
     )
     .await;
     Ok(format!("Removed agent '{}'", name))
+}
+
+#[tauri::command]
+pub async fn toggle_agent(
+    state: State<'_, AppState>,
+    name: String,
+    enabled: bool,
+) -> Result<String, String> {
+    let mut config = AgentsConfig::load(&state.dirs.agents_toml()).map_err(|e| e.to_string())?;
+    let agent = config
+        .agents
+        .get_mut(&name)
+        .ok_or_else(|| format!("Agent '{}' not found", name))?;
+    agent.enabled = enabled;
+    config
+        .save(&state.dirs.agents_toml())
+        .map_err(|e| e.to_string())?;
+    let label = if enabled { "enabled" } else { "disabled" };
+    let _ = logging::log(
+        &state.db,
+        LogEntry {
+            source: Source::Gui,
+            agent_name: None,
+            operation: "agent_toggle",
+            params: None,
+            project_path: None,
+            result: "success",
+            details: &format!("Agent '{}' {}", name, label),
+        },
+    )
+    .await;
+    Ok(format!("Agent '{}' {}", name, label))
 }
 
 // --- Status & Placements ---
@@ -442,6 +570,301 @@ pub async fn deactivate_profile(
         "Deactivated '{}': {} removed, {} kept",
         result.profile_name, result.files_removed, result.files_kept
     ))
+}
+
+// --- Projects ---
+
+#[derive(Serialize)]
+pub struct ProjectInfo {
+    pub path: String,
+    pub name: String,
+    pub linked_profiles: Vec<String>,
+    pub active_profiles: Vec<String>,
+    pub placement_count: usize,
+}
+
+#[tauri::command]
+pub async fn list_projects(state: State<'_, AppState>) -> Result<Vec<ProjectInfo>, String> {
+    let projects = state.db.list_all_projects().await.map_err(|e| e.to_string())?;
+    let mut result: Vec<ProjectInfo> = Vec::new();
+    for project in projects {
+        let linked_profiles = state
+            .db
+            .get_linked_profiles(project.id)
+            .await
+            .unwrap_or_default();
+        let active_profiles = state
+            .db
+            .get_active_profiles(project.id)
+            .await
+            .unwrap_or_default();
+        let placements = state
+            .db
+            .get_all_placements_for_project(project.id)
+            .await
+            .unwrap_or_default();
+        let display_name = project
+            .name
+            .unwrap_or_else(|| {
+                std::path::Path::new(&project.path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| project.path.clone())
+            });
+        result.push(ProjectInfo {
+            path: project.path,
+            name: display_name,
+            linked_profiles,
+            active_profiles,
+            placement_count: placements.len(),
+        });
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn add_project(
+    state: State<'_, AppState>,
+    path: String,
+    name: Option<String>,
+) -> Result<String, String> {
+    let display = name.as_deref().unwrap_or_else(|| {
+        std::path::Path::new(&path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(&path)
+    });
+    state
+        .db
+        .get_or_create_project(&path, Some(display))
+        .await
+        .map_err(|e| e.to_string())?;
+    let _ = logging::log(
+        &state.db,
+        LogEntry {
+            source: Source::Gui,
+            agent_name: None,
+            operation: "project_add",
+            params: None,
+            project_path: Some(&path),
+            result: "success",
+            details: &format!("Registered project '{}'", display),
+        },
+    )
+    .await;
+    Ok(format!("Registered project '{}'", display))
+}
+
+#[tauri::command]
+pub async fn remove_project(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<String, String> {
+    let project_id = state
+        .db
+        .get_or_create_project(&path, None)
+        .await
+        .map_err(|e| e.to_string())?;
+    state
+        .db
+        .delete_project(project_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let _ = logging::log(
+        &state.db,
+        LogEntry {
+            source: Source::Gui,
+            agent_name: None,
+            operation: "project_remove",
+            params: None,
+            project_path: Some(&path),
+            result: "success",
+            details: &format!("Removed project tracking for '{}'", path),
+        },
+    )
+    .await;
+    Ok(format!("Removed project '{}'", path))
+}
+
+#[tauri::command]
+pub async fn link_profile_to_project(
+    state: State<'_, AppState>,
+    project_path: String,
+    profile_name: String,
+) -> Result<String, String> {
+    let project_id = state
+        .db
+        .get_or_create_project(&project_path, None)
+        .await
+        .map_err(|e| e.to_string())?;
+    state
+        .db
+        .link_profile_to_project(project_id, &profile_name)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(format!("Linked '{}' to project", profile_name))
+}
+
+#[tauri::command]
+pub async fn unlink_profile_from_project(
+    state: State<'_, AppState>,
+    project_path: String,
+    profile_name: String,
+) -> Result<String, String> {
+    let project_id = state
+        .db
+        .get_or_create_project(&project_path, None)
+        .await
+        .map_err(|e| e.to_string())?;
+    state
+        .db
+        .unlink_profile_from_project(project_id, &profile_name)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(format!("Unlinked '{}' from project", profile_name))
+}
+
+#[tauri::command]
+pub async fn activate_project(
+    state: State<'_, AppState>,
+    project_path: String,
+) -> Result<String, String> {
+    let project_id = state
+        .db
+        .get_or_create_project(&project_path, None)
+        .await
+        .map_err(|e| e.to_string())?;
+    let linked = state
+        .db
+        .get_linked_profiles(project_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    if linked.is_empty() {
+        return Err("No profiles linked to this project".to_string());
+    }
+    let profiles_config =
+        ProfilesConfig::load(&state.dirs.profiles_toml()).map_err(|e| e.to_string())?;
+    let agents_config = AgentsConfig::load(&state.dirs.agents_toml()).map_err(|e| e.to_string())?;
+    let mut errors: Vec<String> = Vec::new();
+    let mut activated: Vec<String> = Vec::new();
+    for profile_name in &linked {
+        match placements::activate(
+            &state.dirs,
+            &state.db,
+            &profiles_config,
+            &agents_config,
+            profile_name,
+            &project_path,
+            false,
+        )
+        .await
+        {
+            Ok(_) => activated.push(profile_name.clone()),
+            Err(e) => errors.push(format!("{}: {}", profile_name, e)),
+        }
+    }
+    let _ = logging::log(
+        &state.db,
+        LogEntry {
+            source: Source::Gui,
+            agent_name: None,
+            operation: "project_activate",
+            params: None,
+            project_path: Some(&project_path),
+            result: if errors.is_empty() { "success" } else { "partial" },
+            details: &format!("Activated {} profiles", activated.len()),
+        },
+    )
+    .await;
+    if !errors.is_empty() {
+        return Err(format!("Some profiles failed: {}", errors.join("; ")));
+    }
+    Ok(format!("Activated {} profiles", activated.len()))
+}
+
+#[tauri::command]
+pub async fn deactivate_project(
+    state: State<'_, AppState>,
+    project_path: String,
+) -> Result<String, String> {
+    let project_id = state
+        .db
+        .get_or_create_project(&project_path, None)
+        .await
+        .map_err(|e| e.to_string())?;
+    let active = state
+        .db
+        .get_active_profiles(project_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    if active.is_empty() {
+        return Err("No active profiles to deactivate".to_string());
+    }
+    let mut errors: Vec<String> = Vec::new();
+    let mut deactivated: Vec<String> = Vec::new();
+    for profile_name in &active {
+        match placements::deactivate(&state.db, profile_name, &project_path).await {
+            Ok(_) => deactivated.push(profile_name.clone()),
+            Err(e) => errors.push(format!("{}: {}", profile_name, e)),
+        }
+    }
+    let _ = logging::log(
+        &state.db,
+        LogEntry {
+            source: Source::Gui,
+            agent_name: None,
+            operation: "project_deactivate",
+            params: None,
+            project_path: Some(&project_path),
+            result: if errors.is_empty() { "success" } else { "partial" },
+            details: &format!("Deactivated {} profiles", deactivated.len()),
+        },
+    )
+    .await;
+    if !errors.is_empty() {
+        return Err(format!("Some profiles failed: {}", errors.join("; ")));
+    }
+    Ok(format!("Deactivated {} profiles", deactivated.len()))
+}
+
+// --- Settings ---
+
+#[derive(Serialize, Deserialize)]
+pub struct SettingsPayload {
+    pub mcp_enabled: bool,
+    pub mcp_port: u16,
+    pub mcp_transport: String,
+    pub git_sync_enabled: bool,
+    pub git_sync_repo_url: String,
+}
+
+#[tauri::command]
+pub async fn get_settings(state: State<'_, AppState>) -> Result<SettingsPayload, String> {
+    let settings = AppSettings::load(&state.dirs.settings_toml()).map_err(|e| e.to_string())?;
+    Ok(SettingsPayload {
+        mcp_enabled: settings.mcp.enabled,
+        mcp_port: settings.mcp.port,
+        mcp_transport: settings.mcp.transport,
+        git_sync_enabled: settings.git_sync.enabled,
+        git_sync_repo_url: settings.git_sync.repo_url,
+    })
+}
+
+#[tauri::command]
+pub async fn save_settings(
+    state: State<'_, AppState>,
+    payload: SettingsPayload,
+) -> Result<String, String> {
+    let mut settings = AppSettings::load(&state.dirs.settings_toml()).map_err(|e| e.to_string())?;
+    settings.mcp.enabled = payload.mcp_enabled;
+    settings.mcp.port = payload.mcp_port;
+    settings.mcp.transport = payload.mcp_transport;
+    settings.git_sync.enabled = payload.git_sync_enabled;
+    settings.git_sync.repo_url = payload.git_sync_repo_url;
+    settings
+        .save(&state.dirs.settings_toml())
+        .map_err(|e| e.to_string())?;
+    Ok("Settings saved".to_string())
 }
 
 // --- Logs ---

@@ -17,6 +17,13 @@ CREATE TABLE IF NOT EXISTS project_profiles (
     PRIMARY KEY (project_id, profile_name)
 );
 
+CREATE TABLE IF NOT EXISTS project_linked_profiles (
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    profile_name TEXT NOT NULL,
+    linked_at TEXT NOT NULL,
+    PRIMARY KEY (project_id, profile_name)
+);
+
 CREATE TABLE IF NOT EXISTS project_agents (
     project_id INTEGER NOT NULL REFERENCES projects(id),
     agent_name TEXT NOT NULL,
@@ -124,6 +131,39 @@ impl Database {
             .await?;
 
         Ok(result.last_insert_rowid())
+    }
+
+    pub async fn list_all_projects(&self) -> Result<Vec<ProjectRow>> {
+        let rows = sqlx::query_as::<_, ProjectRow>(
+            "SELECT id, path, name FROM projects ORDER BY id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn delete_project(&self, project_id: i64) -> Result<()> {
+        sqlx::query("DELETE FROM placements WHERE project_id = ?")
+            .bind(project_id)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("DELETE FROM project_profiles WHERE project_id = ?")
+            .bind(project_id)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("DELETE FROM project_linked_profiles WHERE project_id = ?")
+            .bind(project_id)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("DELETE FROM project_agents WHERE project_id = ?")
+            .bind(project_id)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("DELETE FROM projects WHERE id = ?")
+            .bind(project_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     // --- Operation Log ---
@@ -377,6 +417,70 @@ impl Database {
         .await?;
         Ok(rows.into_iter().map(|(name,)| name).collect())
     }
+
+    pub async fn get_projects_for_profile(&self, profile_name: &str) -> Result<Vec<(String, Option<String>)>> {
+        let rows: Vec<(String, Option<String>)> = sqlx::query_as(
+            "SELECT p.path, p.name FROM projects p
+             INNER JOIN project_profiles pp ON p.id = pp.project_id
+             WHERE pp.profile_name = ?
+             ORDER BY pp.activated_at",
+        )
+        .bind(profile_name)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    // --- Project Linked Profiles ---
+
+    pub async fn link_profile_to_project(
+        &self,
+        project_id: i64,
+        profile_name: &str,
+    ) -> Result<()> {
+        let now = chrono::Utc::now()
+            .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+            .to_string();
+        sqlx::query(
+            "INSERT OR IGNORE INTO project_linked_profiles (project_id, profile_name, linked_at) VALUES (?, ?, ?)",
+        )
+        .bind(project_id)
+        .bind(profile_name)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn unlink_profile_from_project(
+        &self,
+        project_id: i64,
+        profile_name: &str,
+    ) -> Result<()> {
+        sqlx::query("DELETE FROM project_linked_profiles WHERE project_id = ? AND profile_name = ?")
+            .bind(project_id)
+            .bind(profile_name)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn get_linked_profiles(&self, project_id: i64) -> Result<Vec<String>> {
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT profile_name FROM project_linked_profiles WHERE project_id = ? ORDER BY linked_at",
+        )
+        .bind(project_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|(name,)| name).collect())
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct ProjectRow {
+    pub id: i64,
+    pub path: String,
+    pub name: Option<String>,
 }
 
 #[derive(Debug, sqlx::FromRow)]

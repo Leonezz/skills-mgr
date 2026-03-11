@@ -1,23 +1,26 @@
 import { Link, Outlet, useLocation } from "react-router"
 import {
   LayoutDashboard,
-  Wrench,
+  FileCode,
   Layers,
+  FolderKanban,
   Bot,
-  Activity,
+  ScrollText,
   Settings,
   Sun,
   Moon,
   Monitor,
 } from "lucide-react"
 import { useTheme } from "@/lib/theme"
+import { cn } from "@/lib/utils"
 
 const navItems = [
   { path: "/", label: "Dashboard", icon: LayoutDashboard },
-  { path: "/skills", label: "Skills", icon: Wrench },
+  { path: "/skills", label: "Skills", icon: FileCode },
   { path: "/profiles", label: "Profiles", icon: Layers },
-  { path: "/agents", label: "Agents", icon: Bot },
-  { path: "/activity", label: "Activity", icon: Activity },
+  { path: "/projects", label: "Projects", icon: FolderKanban },
+  { path: "/agents", label: "Agent Tools", icon: Bot },
+  { path: "/activity", label: "Activity Log", icon: ScrollText },
   { path: "/settings", label: "Settings", icon: Settings },
 ]
 
@@ -33,8 +36,15 @@ export function AppLayout() {
 
   return (
     <div className="flex h-screen bg-background text-foreground">
-      <nav className="flex w-56 flex-col border-r border-border bg-muted/40 p-4">
-        <h1 className="mb-6 text-lg font-semibold">Skills Manager</h1>
+      {/* Sidebar */}
+      <nav className="flex w-60 flex-col border-r border-border bg-card p-4 pt-5">
+        {/* Brand */}
+        <div className="mb-5 flex items-center gap-2.5 px-1">
+          <Layers className="h-6 w-6 text-primary" />
+          <span className="text-base font-bold">Skills Manager</span>
+        </div>
+
+        {/* Nav items */}
         <ul className="flex-1 space-y-1">
           {navItems.map((item) => {
             const Icon = item.icon
@@ -43,11 +53,12 @@ export function AppLayout() {
               <li key={item.path}>
                 <Link
                   to={item.path}
-                  className={`flex items-center gap-2 rounded-md px-3 py-2 text-sm ${
+                  className={cn(
+                    "flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-all duration-150",
                     isActive
-                      ? "bg-primary text-primary-foreground"
-                      : "hover:bg-muted text-muted-foreground"
-                  }`}
+                      ? "bg-primary text-primary-foreground shadow-sm"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  )}
                 >
                   <Icon className="h-4 w-4" />
                   {item.label}
@@ -56,6 +67,8 @@ export function AppLayout() {
             )
           })}
         </ul>
+
+        {/* Theme switcher */}
         <div className="border-t border-border pt-3">
           <div className="flex items-center justify-between rounded-md bg-muted p-1">
             {themeOptions.map((opt) => {
@@ -65,11 +78,12 @@ export function AppLayout() {
                   key={opt.value}
                   onClick={() => setTheme(opt.value)}
                   title={opt.label}
-                  className={`flex-1 rounded-sm p-1.5 transition-colors ${
+                  className={cn(
+                    "flex-1 rounded-sm p-1.5 transition-colors",
                     theme === opt.value
                       ? "bg-background text-foreground shadow-sm"
                       : "text-muted-foreground hover:text-foreground"
-                  }`}
+                  )}
                 >
                   <Icon className="mx-auto h-4 w-4" />
                 </button>
@@ -78,8 +92,12 @@ export function AppLayout() {
           </div>
         </div>
       </nav>
-      <main className="flex-1 overflow-auto p-6">
-        <Outlet />
+
+      {/* Main area */}
+      <main className="flex-1 overflow-auto p-8">
+        <div className="animate-page-in">
+          <Outlet />
+        </div>
       </main>
     </div>
   )

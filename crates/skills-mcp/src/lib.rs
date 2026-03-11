@@ -399,6 +399,7 @@ impl SkillsMcpServer {
                     AgentDef {
                         project_path: project_path.to_string(),
                         global_path: global_path.to_string(),
+                        enabled: true,
                     },
                 );
                 config.save(&self.dirs.agents_toml())?;

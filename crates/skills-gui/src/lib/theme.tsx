@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react"
+import { createContext, useContext, useEffect, useState } from "react"
 
-type Theme = "light" | "dark" | "system"
+export type Theme = "light" | "dark" | "system"
 
 const STORAGE_KEY = "skills-mgr-theme"
 
@@ -13,7 +13,14 @@ function applyTheme(theme: Theme) {
   document.documentElement.classList.toggle("dark", resolved === "dark")
 }
 
-export function useTheme() {
+interface ThemeContextValue {
+  theme: Theme
+  setTheme: (t: Theme) => void
+}
+
+const ThemeContext = createContext<ThemeContextValue | null>(null)
+
+export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, setThemeState] = useState<Theme>(() => {
     const stored = localStorage.getItem(STORAGE_KEY)
     return (stored as Theme) ?? "system"
@@ -35,5 +42,17 @@ export function useTheme() {
     setThemeState(next)
   }
 
-  return { theme, setTheme } as const
+  return (
+    <ThemeContext.Provider value={{ theme, setTheme }}>
+      {children}
+    </ThemeContext.Provider>
+  )
+}
+
+export function useTheme(): ThemeContextValue {
+  const ctx = useContext(ThemeContext)
+  if (!ctx) {
+    throw new Error("useTheme must be used within a ThemeProvider")
+  }
+  return ctx
 }

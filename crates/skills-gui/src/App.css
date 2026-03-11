@@ -8,19 +8,19 @@
   --color-card-foreground: oklch(0.145 0 0);
   --color-popover: oklch(1 0 0);
   --color-popover-foreground: oklch(0.145 0 0);
-  --color-primary: oklch(0.205 0 0);
+  --color-primary: oklch(0.32 0.08 265);
   --color-primary-foreground: oklch(0.985 0 0);
   --color-secondary: oklch(0.94 0 0);
   --color-secondary-foreground: oklch(0.205 0 0);
   --color-muted: oklch(0.94 0 0);
   --color-muted-foreground: oklch(0.45 0 0);
-  --color-accent: oklch(0.94 0 0);
-  --color-accent-foreground: oklch(0.205 0 0);
+  --color-accent: oklch(0.55 0.2 265);
+  --color-accent-foreground: oklch(1 0 0);
   --color-destructive: oklch(0.577 0.245 27.325);
   --color-destructive-foreground: oklch(0.985 0 0);
   --color-border: oklch(0.885 0 0);
   --color-input: oklch(0.885 0 0);
-  --color-ring: oklch(0.708 0 0);
+  --color-ring: oklch(0.55 0.2 265);
   --radius-sm: 0.25rem;
   --radius-md: 0.375rem;
   --radius-lg: 0.5rem;
@@ -35,23 +35,99 @@
   --color-card-foreground: oklch(0.94 0 0);
   --color-popover: oklch(0.21 0 0);
   --color-popover-foreground: oklch(0.94 0 0);
-  --color-primary: oklch(0.94 0 0);
+  --color-primary: oklch(0.72 0.12 265);
   --color-primary-foreground: oklch(0.18 0 0);
   --color-secondary: oklch(0.30 0 0);
   --color-secondary-foreground: oklch(0.94 0 0);
   --color-muted: oklch(0.30 0 0);
   --color-muted-foreground: oklch(0.62 0 0);
-  --color-accent: oklch(0.30 0 0);
-  --color-accent-foreground: oklch(0.94 0 0);
+  --color-accent: oklch(0.65 0.18 265);
+  --color-accent-foreground: oklch(1 0 0);
   --color-destructive: oklch(0.577 0.245 27.325);
   --color-destructive-foreground: oklch(0.94 0 0);
   --color-border: oklch(0.32 0 0);
   --color-input: oklch(0.32 0 0);
-  --color-ring: oklch(0.55 0 0);
+  --color-ring: oklch(0.65 0.18 265);
 }
 
-body {
+html, body {
   font-family: Inter, system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  -webkit-user-select: none;
+  user-select: none;
+  overflow: hidden;
+}
+
+* {
+  -webkit-user-drag: none;
+  -webkit-app-region: no-drag;
+}
+
+input, textarea, select, [contenteditable] {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* ---- Animations ---- */
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes scale-in {
+  from { opacity: 0; transform: translate(-50%, -50%) scale(0.95); }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+
+@keyframes slide-in-right {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+@keyframes overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Dialog overlay */
+.animate-overlay-in {
+  animation: overlay-in 150ms ease-out;
+}
+
+/* Dialog content */
+.animate-dialog-in {
+  animation: scale-in 200ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* Sheet slide-in */
+.animate-sheet-in {
+  animation: slide-in-right 250ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Page content fade-in */
+.animate-page-in {
+  animation: fade-in-up 300ms ease-out;
+}
+
+/* Stagger list items */
+.animate-list-item {
+  animation: fade-in-up 300ms ease-out both;
+}
+
+/* Respect reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .animate-overlay-in,
+  .animate-dialog-in,
+  .animate-sheet-in,
+  .animate-page-in,
+  .animate-list-item {
+    animation: none;
+  }
 }

@@ -19,11 +19,15 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState { dirs, db })
         .invoke_handler(tauri::generate_handler![
             commands::list_skills,
             commands::create_skill,
+            commands::import_skill,
             commands::remove_skill,
+            commands::read_skill_content,
+            commands::update_skill,
             commands::list_profiles,
             commands::create_profile,
             commands::edit_profile,
@@ -32,9 +36,19 @@ pub fn run() {
             commands::add_agent,
             commands::edit_agent,
             commands::remove_agent,
+            commands::toggle_agent,
             commands::get_status,
+            commands::list_projects,
+            commands::add_project,
+            commands::remove_project,
+            commands::link_profile_to_project,
+            commands::unlink_profile_from_project,
+            commands::activate_project,
+            commands::deactivate_project,
             commands::activate_profile,
             commands::deactivate_profile,
+            commands::get_settings,
+            commands::save_settings,
             commands::get_recent_logs,
         ])
         .run(tauri::generate_context!())

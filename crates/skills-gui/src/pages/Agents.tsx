@@ -1,13 +1,71 @@
 import { useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { listAgents, addAgent, editAgent, removeAgent } from "@/lib/api"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Switch } from "@/components/ui/switch"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog"
+import { listAgents, addAgent, editAgent, removeAgent, toggleAgent } from "@/lib/api"
 import { toast } from "sonner"
+import { open } from "@tauri-apps/plugin-dialog"
+import { Plus, MoreVertical, Bot, FolderOpen } from "lucide-react"
 import type { Agent } from "@/lib/schemas"
+
+// Cycle through a palette for agent icons
+const AGENT_COLORS = [
+  { icon: "#6366F1", bg: "#6366F11A" }, // indigo
+  { icon: "#32D583", bg: "#32D58320" }, // green
+  { icon: "#E85A4F", bg: "#E85A4F20" }, // red
+  { icon: "#F59E0B", bg: "#F59E0B20" }, // amber
+  { icon: "#3B82F6", bg: "#3B82F620" }, // blue
+]
+
+function getAgentColor(index: number) {
+  return AGENT_COLORS[index % AGENT_COLORS.length]
+}
+
+function PathInput({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string
+  onChange: (v: string) => void
+  placeholder?: string
+}) {
+  async function handleBrowse() {
+    const selected = await open({ directory: true, title: "Select folder" })
+    if (selected) onChange(selected as string)
+  }
+
+  return (
+    <div className="flex gap-2">
+      <Input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="flex-1"
+      />
+      <Button type="button" variant="outline" size="sm" onClick={handleBrowse}>
+        <FolderOpen className="h-4 w-4" />
+      </Button>
+    </div>
+  )
+}
 
 export function Agents() {
   const queryClient = useQueryClient()
-  const { data: agents, isLoading } = useQuery({ queryKey: ["agents"], queryFn: listAgents })
+  const { data: agents, isLoading } = useQuery({
+    queryKey: ["agents"],
+    queryFn: listAgents,
+  })
+
   const [showAdd, setShowAdd] = useState(false)
   const [showEdit, setShowEdit] = useState<Agent | null>(null)
   const [showDelete, setShowDelete] = useState<string | null>(null)
@@ -26,20 +84,18 @@ export function Agents() {
     onSuccess: (msg) => {
       toast.success(msg)
       queryClient.invalidateQueries({ queryKey: ["agents"] })
-      setShowAdd(false)
-      setNewName("")
-      setNewProjectPath("")
-      setNewGlobalPath("")
+      closeAdd()
     },
     onError: (err) => toast.error(String(err)),
   })
 
   const editMutation = useMutation({
-    mutationFn: () => editAgent(showEdit!.name, editProjectPath, editGlobalPath),
+    mutationFn: () =>
+      editAgent(showEdit!.name, editProjectPath, editGlobalPath),
     onSuccess: (msg) => {
       toast.success(msg)
       queryClient.invalidateQueries({ queryKey: ["agents"] })
-      setShowEdit(null)
+      closeEdit()
     },
     onError: (err) => toast.error(String(err)),
   })
@@ -54,117 +110,247 @@ export function Agents() {
     onError: (err) => toast.error(String(err)),
   })
 
+  const toggleMutation = useMutation({
+    mutationFn: ({ name, enabled }: { name: string; enabled: boolean }) =>
+      toggleAgent(name, enabled),
+    onSuccess: (msg) => {
+      toast.success(msg)
+      queryClient.invalidateQueries({ queryKey: ["agents"] })
+    },
+    onError: (err) => toast.error(String(err)),
+  })
+
+  function closeAdd() {
+    setShowAdd(false)
+    setNewName("")
+    setNewProjectPath("")
+    setNewGlobalPath("")
+  }
+
+  function openEdit(agent: Agent) {
+    setEditProjectPath(agent.project_path)
+    setEditGlobalPath(agent.global_path)
+    setShowEdit(agent)
+  }
+
+  function closeEdit() {
+    setShowEdit(null)
+    setEditProjectPath("")
+    setEditGlobalPath("")
+  }
+
   return (
     <div className="space-y-6">
+      {/* Header */}
       <div className="flex items-center justify-between">
-        <h2 className="text-2xl font-bold">Agents</h2>
-        <button onClick={() => setShowAdd(true)} className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90">
+        <div>
+          <h2 className="text-2xl font-bold tracking-tight">Agent Tools</h2>
+          <p className="text-sm text-muted-foreground">
+            Define where skills are placed for each AI agent tool
+          </p>
+        </div>
+        <Button onClick={() => setShowAdd(true)}>
+          <Plus className="h-4 w-4" />
           Add Agent
-        </button>
+        </Button>
       </div>
 
-      {/* Add Modal */}
-      {showAdd && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowAdd(false)}>
-          <div className="w-full max-w-md rounded-lg bg-background p-6 shadow-lg" onClick={(e) => e.stopPropagation()}>
-            <h3 className="mb-4 text-lg font-semibold">Add Agent</h3>
-            <div className="space-y-3">
-              <div>
-                <label className="mb-1 block text-sm text-muted-foreground">Name</label>
-                <input value={newName} onChange={(e) => setNewName(e.target.value)} className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm" placeholder="claude-code" />
-              </div>
-              <div>
-                <label className="mb-1 block text-sm text-muted-foreground">Project Path</label>
-                <input value={newProjectPath} onChange={(e) => setNewProjectPath(e.target.value)} className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm" placeholder=".claude/skills" />
-              </div>
-              <div>
-                <label className="mb-1 block text-sm text-muted-foreground">Global Path</label>
-                <input value={newGlobalPath} onChange={(e) => setNewGlobalPath(e.target.value)} className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm" placeholder="~/.claude/skills" />
-              </div>
+      {/* Add Agent Dialog */}
+      <Dialog open={showAdd} onOpenChange={(o) => { if (!o) closeAdd() }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add Agent</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>Agent Name</Label>
+              <Input
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                placeholder="e.g. Claude Code"
+              />
             </div>
-            <div className="mt-4 flex justify-end gap-2">
-              <button onClick={() => setShowAdd(false)} className="rounded-md border border-border px-4 py-2 text-sm hover:bg-muted">Cancel</button>
-              <button onClick={() => addMutation.mutate()} disabled={!newName || !newProjectPath || !newGlobalPath || addMutation.isPending} className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
-                {addMutation.isPending ? "Adding..." : "Add"}
-              </button>
+            <div className="space-y-2">
+              <Label>Relative Path (in project)</Label>
+              <p className="text-xs text-muted-foreground">
+                Relative to project root, e.g. .claude/skills/
+              </p>
+              <Input
+                value={newProjectPath}
+                onChange={(e) => setNewProjectPath(e.target.value)}
+                placeholder=".claude/skills/"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Global Path</Label>
+              <p className="text-xs text-muted-foreground">
+                Absolute path for global skill placement
+              </p>
+              <PathInput
+                value={newGlobalPath}
+                onChange={setNewGlobalPath}
+                placeholder="~/.claude/skills/"
+              />
             </div>
           </div>
-        </div>
-      )}
+          <DialogFooter>
+            <Button variant="outline" onClick={closeAdd}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => addMutation.mutate()}
+              disabled={
+                !newName || !newProjectPath || !newGlobalPath || addMutation.isPending
+              }
+            >
+              {addMutation.isPending ? "Adding..." : "Add Agent"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
-      {/* Edit Modal */}
-      {showEdit && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowEdit(null)}>
-          <div className="w-full max-w-md rounded-lg bg-background p-6 shadow-lg" onClick={(e) => e.stopPropagation()}>
-            <h3 className="mb-4 text-lg font-semibold">Edit Agent: {showEdit.name}</h3>
-            <div className="space-y-3">
-              <div>
-                <label className="mb-1 block text-sm text-muted-foreground">Project Path</label>
-                <input value={editProjectPath} onChange={(e) => setEditProjectPath(e.target.value)} className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm" />
-              </div>
-              <div>
-                <label className="mb-1 block text-sm text-muted-foreground">Global Path</label>
-                <input value={editGlobalPath} onChange={(e) => setEditGlobalPath(e.target.value)} className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm" />
-              </div>
+      {/* Edit Agent Dialog */}
+      <Dialog open={showEdit !== null} onOpenChange={(o) => { if (!o) closeEdit() }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Agent</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>Agent Name</Label>
+              <Input value={showEdit?.name ?? ""} disabled />
             </div>
-            <div className="mt-4 flex justify-end gap-2">
-              <button onClick={() => setShowEdit(null)} className="rounded-md border border-border px-4 py-2 text-sm hover:bg-muted">Cancel</button>
-              <button onClick={() => editMutation.mutate()} disabled={editMutation.isPending} className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
-                {editMutation.isPending ? "Saving..." : "Save"}
-              </button>
+            <div className="space-y-2">
+              <Label>Relative Path (in project)</Label>
+              <p className="text-xs text-muted-foreground">
+                Relative to project root, e.g. .claude/skills/
+              </p>
+              <Input
+                value={editProjectPath}
+                onChange={(e) => setEditProjectPath(e.target.value)}
+                placeholder=".claude/skills/"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Global Path</Label>
+              <p className="text-xs text-muted-foreground">
+                Absolute path for global skill placement
+              </p>
+              <PathInput
+                value={editGlobalPath}
+                onChange={setEditGlobalPath}
+                placeholder="~/.claude/skills/"
+              />
             </div>
           </div>
-        </div>
-      )}
+          <DialogFooter className="justify-between">
+            <button
+              onClick={() => {
+                if (showEdit) {
+                  setShowDelete(showEdit.name)
+                  closeEdit()
+                }
+              }}
+              className="text-sm text-destructive hover:underline"
+            >
+              Delete Agent
+            </button>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={closeEdit}>
+                Cancel
+              </Button>
+              <Button
+                onClick={() => editMutation.mutate()}
+                disabled={editMutation.isPending}
+              >
+                {editMutation.isPending ? "Saving..." : "Save Changes"}
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Delete Confirmation */}
-      {showDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowDelete(null)}>
-          <div className="w-full max-w-sm rounded-lg bg-background p-6 shadow-lg" onClick={(e) => e.stopPropagation()}>
-            <h3 className="mb-2 text-lg font-semibold">Remove Agent</h3>
-            <p className="mb-4 text-sm text-muted-foreground">Remove agent <strong>{showDelete}</strong>?</p>
-            <div className="flex justify-end gap-2">
-              <button onClick={() => setShowDelete(null)} className="rounded-md border border-border px-4 py-2 text-sm hover:bg-muted">Cancel</button>
-              <button onClick={() => deleteMutation.mutate(showDelete)} disabled={deleteMutation.isPending} className="rounded-md bg-destructive px-4 py-2 text-sm text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50">
-                {deleteMutation.isPending ? "Removing..." : "Remove"}
-              </button>
+      <Dialog open={showDelete !== null} onOpenChange={(o) => { if (!o) setShowDelete(null) }}>
+        <DialogContent className="max-w-[420px] space-y-4 p-7">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-destructive/15 text-lg font-bold text-destructive">
+              !
             </div>
+            <h2 className="text-lg font-semibold">Remove Agent?</h2>
           </div>
-        </div>
-      )}
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            Are you sure you want to remove &quot;{showDelete}&quot;? This action cannot
+            be undone. All agent configuration will be lost.
+          </p>
+          <hr className="border-border" />
+          <div className="flex gap-3">
+            <Button variant="outline" className="flex-1" onClick={() => setShowDelete(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              className="flex-1"
+              onClick={() => { if (showDelete) deleteMutation.mutate(showDelete) }}
+              disabled={deleteMutation.isPending}
+            >
+              {deleteMutation.isPending ? "Removing..." : "Remove"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
-      {/* Agent Cards */}
+      {/* Agent List — stacked rows */}
       {isLoading ? (
         <p className="text-muted-foreground">Loading...</p>
       ) : agents && agents.length > 0 ? (
         <div className="space-y-3">
-          {agents.map((agent: Agent) => (
-            <Card key={agent.name} className="group relative">
-              <div className="absolute right-3 top-3 flex gap-1 opacity-0 group-hover:opacity-100">
-                <button
-                  onClick={() => { setShowEdit(agent); setEditProjectPath(agent.project_path); setEditGlobalPath(agent.global_path); }}
-                  className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-                  title="Edit"
+          {agents.map((agent: Agent, index: number) => {
+            const color = getAgentColor(index)
+            return (
+              <div
+                key={agent.name}
+                className="animate-list-item group flex items-center gap-4 rounded-xl border border-border bg-card p-5 transition-colors hover:border-primary/30"
+                style={{ animationDelay: `${index * 50}ms` }}
+              >
+                {/* Colored bot icon */}
+                <div
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px]"
+                  style={{ backgroundColor: color.bg }}
                 >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
-                </button>
+                  <Bot className="h-5 w-5" style={{ color: color.icon }} />
+                </div>
+
+                {/* Info */}
+                <div className="flex-1 space-y-1.5 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[15px] font-semibold">{agent.name}</span>
+                    <span className={`h-2 w-2 rounded-full ${agent.enabled ? "bg-emerald-500" : "bg-muted-foreground/40"}`} />
+                  </div>
+                  <div className="flex items-center gap-6 text-xs text-muted-foreground">
+                    <span>In project: {agent.project_path}</span>
+                    <span>Global: {agent.global_path}</span>
+                  </div>
+                </div>
+
+                {/* Toggle — global enable/disable */}
+                <Switch
+                  checked={agent.enabled}
+                  onCheckedChange={(checked) => {
+                    toggleMutation.mutate({ name: agent.name, enabled: checked })
+                  }}
+                />
+
+                {/* Overflow menu */}
                 <button
-                  onClick={() => setShowDelete(agent.name)}
-                  className="rounded-md p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                  title="Remove"
+                  onClick={() => openEdit(agent)}
+                  className="rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
                 >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                  <MoreVertical className="h-4 w-4" />
                 </button>
               </div>
-              <CardHeader>
-                <CardTitle className="text-base">{agent.name}</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-sm text-muted-foreground">Project: {agent.project_path}</p>
-                <p className="text-sm text-muted-foreground">Global: {agent.global_path}</p>
-              </CardContent>
-            </Card>
-          ))}
+            )
+          })}
         </div>
       ) : (
         <p className="text-muted-foreground">No agents configured.</p>

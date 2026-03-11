@@ -30,6 +30,7 @@ pub async fn run(dirs: &AppDirs, db: &Database, action: AgentAction) -> Result<(
                 AgentDef {
                     project_path,
                     global_path,
+                    enabled: true,
                 },
             );
             config.save(&dirs.agents_toml())?;

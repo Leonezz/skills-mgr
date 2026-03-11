@@ -143,6 +143,28 @@ impl Registry {
         Ok(())
     }
 
+    /// Update a skill's SKILL.md description.
+    pub fn update_description(&self, name: &str, description: &str) -> Result<()> {
+        let skill_dir = self.dirs.registry().join(name);
+        let skill_md = skill_dir.join("SKILL.md");
+        if !skill_md.exists() {
+            bail!("Skill '{}' not found in registry", name);
+        }
+        let content = std::fs::read_to_string(&skill_md)?;
+        let updated = update_frontmatter_description(&content, description);
+        std::fs::write(&skill_md, updated)?;
+        Ok(())
+    }
+
+    /// Read the raw SKILL.md content.
+    pub fn read_content(&self, name: &str) -> Result<String> {
+        let skill_md = self.dirs.registry().join(name).join("SKILL.md");
+        if !skill_md.exists() {
+            bail!("Skill '{}' not found in registry", name);
+        }
+        Ok(std::fs::read_to_string(&skill_md)?)
+    }
+
     /// Add a skill from a local directory (copy into registry).
     pub fn add_from_local(&self, source_path: &Path) -> Result<String> {
         let skill_md = source_path.join("SKILL.md");
@@ -247,6 +269,45 @@ fn parse_description(skill_md: &Path) -> Result<String> {
         }
     }
     bail!("No description field in frontmatter")
+}
+
+/// Replace or insert the description field in SKILL.md frontmatter.
+fn update_frontmatter_description(content: &str, new_description: &str) -> String {
+    let trimmed = content.trim();
+    if !trimmed.starts_with("---") {
+        // No frontmatter — prepend one
+        return format!(
+            "---\ndescription: {}\n---\n\n{}",
+            new_description, content
+        );
+    }
+    let after_first = &trimmed[3..];
+    if let Some(end) = after_first.find("---") {
+        let frontmatter = &after_first[..end];
+        let rest = &after_first[end + 3..];
+
+        let mut found = false;
+        let updated_lines: Vec<String> = frontmatter
+            .lines()
+            .map(|line| {
+                if line.trim().starts_with("description:") {
+                    found = true;
+                    format!("description: {}", new_description)
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect();
+
+        let mut fm = updated_lines.join("\n");
+        if !found {
+            fm.push_str(&format!("\ndescription: {}", new_description));
+        }
+
+        format!("---{}---{}", fm, rest)
+    } else {
+        content.to_string()
+    }
 }
 
 /// Copy a directory recursively.

@@ -43,6 +43,9 @@ impl AppDirs {
     pub fn cache(&self) -> PathBuf {
         self.base.join("local").join("cache")
     }
+    pub fn settings_toml(&self) -> PathBuf {
+        self.base.join("settings.toml")
+    }
 
     /// Ensure all required directories exist.
     pub fn ensure_dirs(&self) -> Result<()> {
@@ -129,6 +132,12 @@ pub struct AgentsConfig {
 pub struct AgentDef {
     pub project_path: String,
     pub global_path: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl SourcesConfig {
@@ -149,6 +158,67 @@ impl SourcesConfig {
 }
 
 impl ProfilesConfig {
+    pub fn load(path: &Path) -> Result<Self> {
+        if !path.exists() {
+            return Ok(Self::default());
+        }
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("Failed to read {}", path.display()))?;
+        toml::from_str(&content).with_context(|| format!("Failed to parse {}", path.display()))
+    }
+
+    pub fn save(&self, path: &Path) -> Result<()> {
+        let content = toml::to_string_pretty(self)?;
+        std::fs::write(path, content)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AppSettings {
+    #[serde(default)]
+    pub mcp: McpSettings,
+    #[serde(default)]
+    pub git_sync: GitSyncSettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpSettings {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_mcp_port")]
+    pub port: u16,
+    #[serde(default = "default_mcp_transport")]
+    pub transport: String,
+}
+
+fn default_mcp_port() -> u16 {
+    3100
+}
+
+fn default_mcp_transport() -> String {
+    "stdio".to_string()
+}
+
+impl Default for McpSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: default_mcp_port(),
+            transport: default_mcp_transport(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GitSyncSettings {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub repo_url: String,
+}
+
+impl AppSettings {
     pub fn load(path: &Path) -> Result<Self> {
         if !path.exists() {
             return Ok(Self::default());
@@ -283,6 +353,7 @@ mod tests {
                     AgentDef {
                         project_path: ".claude/skills".into(),
                         global_path: "~/.claude/skills".into(),
+                        enabled: true,
                     },
                 );
                 m

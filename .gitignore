@@ -8,3 +8,5 @@ crates/skills-gui/dist/
 # Tauri generated
 crates/skills-gui/src-tauri/gen/
 crates/skills-gui/src-tauri/target/
+
+/node_modules
