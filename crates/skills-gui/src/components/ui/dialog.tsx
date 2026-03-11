@@ -58,7 +58,7 @@ const DialogOverlay = React.forwardRef<
       ref={ref}
       aria-hidden="true"
       className={cn(
-        "fixed inset-0 z-50 bg-black/50 animate-overlay-in",
+        "fixed inset-0 z-50 bg-black/50 animate-overlay-in h-full",
         className
       )}
       onClick={handleClick}
