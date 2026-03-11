@@ -221,9 +221,13 @@ impl Registry {
     pub async fn add_from_remote(&self, url_or_shorthand: &str) -> Result<String> {
         let source = remote::parse_github_url(url_or_shorthand)?;
         let skill_name = remote::derive_skill_name(&source);
-        eprintln!(
-            "[registry] Remote import: owner={}, repo={}, ref={}, subpath={:?}, skill_name={}",
-            source.owner, source.repo, source.git_ref, source.subpath, skill_name
+        tracing::info!(
+            owner = %source.owner,
+            repo = %source.repo,
+            git_ref = %source.git_ref,
+            subpath = ?source.subpath,
+            skill_name = %skill_name,
+            "Remote import: parsed source"
         );
 
         let dest = self.dirs.registry().join(&skill_name);
@@ -231,9 +235,9 @@ impl Registry {
             bail!("Skill '{}' already exists in registry", skill_name);
         }
 
-        eprintln!("[registry] Downloading tarball...");
+        tracing::info!("Downloading tarball...");
         let (_tmp_dir, skill_dir) = remote::download_github_skill(&source).await?;
-        eprintln!("[registry] Downloaded, copying to {}", dest.display());
+        tracing::info!(dest = %dest.display(), "Downloaded, copying to registry");
 
         copy_dir_recursive(&skill_dir, &dest)?;
 

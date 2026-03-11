@@ -155,12 +155,12 @@ pub async fn import_remote_skill(
     state: State<'_, AppState>,
     url: String,
 ) -> Result<String, String> {
-    eprintln!("[import_remote_skill] Starting import from: {}", url);
+    tracing::info!(url = %url, "Starting remote skill import");
     let registry = Registry::new(state.dirs.clone());
     let params_json = serde_json::json!({ "url": url });
     match registry.add_from_remote(&url).await {
         Ok(name) => {
-            eprintln!("[import_remote_skill] Success: imported '{}'", name);
+            tracing::info!(skill = %name, "Remote skill imported successfully");
             let _ = logging::log(
                 &state.db,
                 LogEntry {
@@ -178,7 +178,7 @@ pub async fn import_remote_skill(
         }
         Err(e) => {
             let err_msg = e.to_string();
-            eprintln!("[import_remote_skill] Failed: {}", err_msg);
+            tracing::error!(url = %url, error = %err_msg, "Remote skill import failed");
             let _ = logging::log(
                 &state.db,
                 LogEntry {

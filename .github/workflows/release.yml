@@ -6,23 +6,25 @@ on:
       - 'v*'
 
 jobs:
-  build:
-    name: Build (${{ matrix.os }})
+  publish:
+    name: Build & Release (${{ matrix.label }})
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: macos-latest
-            target: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin
             label: macos-arm64
           - os: macos-latest
-            target: x86_64-apple-darwin
+            args: --target x86_64-apple-darwin
             label: macos-x64
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-22.04
+            args: ""
             label: linux-x64
           - os: windows-latest
-            target: x86_64-pc-windows-msvc
+            args: ""
             label: windows-x64
     runs-on: ${{ matrix.os }}
     steps:
@@ -31,7 +33,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: aarch64-apple-darwin
 
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
@@ -49,41 +51,21 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install Tauri CLI
-        run: cargo install tauri-cli --version "^2"
-
       - name: Install frontend dependencies
         working-directory: crates/skills-gui
         run: pnpm install --frozen-lockfile
 
-      - name: Build Tauri app
-        working-directory: crates/skills-gui
-        run: cargo tauri build --target ${{ matrix.target }}
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+      - name: Build and release with tauri-action
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          name: skills-mgr-${{ matrix.label }}
-          path: |
-            target/${{ matrix.target }}/release/bundle/**/*
-            target/${{ matrix.target }}/release/skills-mgr*
-
-  release:
-    name: Create Release
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          generate_release_notes: true
-          files: artifacts/**/*
+          projectPath: crates/skills-gui
+          tagName: ${{ github.ref_name }}
+          releaseName: "Skills Manager ${{ github.ref_name }}"
+          releaseBody: "See the assets to download and install this version."
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.args }}

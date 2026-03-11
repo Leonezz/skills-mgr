@@ -2,6 +2,23 @@ mod commands;
 
 use commands::AppState;
 use skills_core::{AppDirs, Database};
+use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
+
+fn init_tracing(log_dir: &std::path::Path) {
+    let file_appender = tracing_appender::rolling::daily(log_dir, "skills-gui.log");
+
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info,sqlx=warn,reqwest=warn,hyper=warn"));
+
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(fmt::layer().with_writer(std::io::stderr))
+        .with(fmt::layer().with_ansi(false).with_writer(file_appender))
+        .init();
+
+    // Bridge log crate (used by Tauri, sqlx, reqwest) into tracing
+    tracing_log::LogTracer::init().ok();
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -17,9 +34,17 @@ pub fn run() {
         (dirs, db)
     });
 
+    // Initialize tracing to stderr + rolling log file
+    let log_dir = dirs.base().join("logs");
+    std::fs::create_dir_all(&log_dir).ok();
+    init_tracing(&log_dir);
+
+    tracing::info!("skills-gui starting up, base_dir={}", dirs.base().display());
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState { dirs, db })
         .invoke_handler(tauri::generate_handler![
             commands::list_skills,
