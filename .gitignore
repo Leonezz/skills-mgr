@@ -1,2 +1,10 @@
 /target
 .DS_Store
+
+# Frontend
+crates/skills-gui/node_modules/
+crates/skills-gui/dist/
+
+# Tauri generated
+crates/skills-gui/src-tauri/gen/
+crates/skills-gui/src-tauri/target/
