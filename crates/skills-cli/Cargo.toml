@@ -12,4 +12,5 @@ skills-core = { path = "../skills-core" }
 clap = { version = "4", features = ["derive"] }
 anyhow.workspace = true
 tokio.workspace = true
+chrono.workspace = true
 open = "5"

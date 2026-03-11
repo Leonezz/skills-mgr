@@ -315,6 +315,32 @@ impl Database {
         Ok(())
     }
 
+    // --- Project Agents ---
+
+    pub async fn set_agent_enabled(&self, project_id: i64, agent_name: &str, enabled: bool) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO project_agents (project_id, agent_name, enabled) VALUES (?, ?, ?)
+             ON CONFLICT (project_id, agent_name) DO UPDATE SET enabled = excluded.enabled",
+        )
+        .bind(project_id)
+        .bind(agent_name)
+        .bind(enabled as i32)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn is_agent_enabled(&self, project_id: i64, agent_name: &str) -> Result<bool> {
+        let row: Option<(i32,)> = sqlx::query_as(
+            "SELECT enabled FROM project_agents WHERE project_id = ? AND agent_name = ?",
+        )
+        .bind(project_id)
+        .bind(agent_name)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|(e,)| e != 0).unwrap_or(true))
+    }
+
     pub async fn get_active_profiles(&self, project_id: i64) -> Result<Vec<String>> {
         let rows: Vec<(String,)> = sqlx::query_as(
             "SELECT profile_name FROM project_profiles WHERE project_id = ? ORDER BY activated_at",

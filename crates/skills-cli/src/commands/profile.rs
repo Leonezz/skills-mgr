@@ -1,5 +1,6 @@
 use anyhow::Result;
 use skills_core::config::{ProfileDef, ProfilesConfig, AgentsConfig};
+use skills_core::logging::{self, Source};
 use skills_core::{AppDirs, Database};
 use skills_core::placements;
 use skills_core::profiles;
@@ -45,11 +46,13 @@ pub async fn run(dirs: &AppDirs, db: &Database, action: ProfileAction) -> Result
             profiles::validate_no_cycles(&profiles_config)?;
             profiles_config.save(&dirs.profiles_toml())?;
             println!("Created profile '{}'", name);
+            logging::log(db, Source::Cli, None, "profile_create", None, None, "success", &format!("Created profile '{}'", name)).await?;
         }
         ProfileAction::Delete { name } => {
             if profiles_config.profiles.remove(&name).is_some() {
                 profiles_config.save(&dirs.profiles_toml())?;
                 println!("Deleted profile '{}'", name);
+                logging::log(db, Source::Cli, None, "profile_delete", None, None, "success", &format!("Deleted profile '{}'", name)).await?;
             } else {
                 println!("Profile '{}' not found", name);
             }
@@ -63,17 +66,20 @@ pub async fn run(dirs: &AppDirs, db: &Database, action: ProfileAction) -> Result
             profiles::validate_no_cycles(&profiles_config)?;
             profiles_config.save(&dirs.profiles_toml())?;
             println!("Updated profile '{}'", name);
+            logging::log(db, Source::Cli, None, "profile_edit", None, None, "success", &format!("Updated profile '{}'", name)).await?;
         }
         ProfileAction::Activate { name, project, global: _, force } => {
             let project_path = resolve_project_path(project)?;
             let result = placements::activate(dirs, db, &profiles_config, &agents_config, &name, &project_path, force).await?;
             println!("Activated profile '{}' for {}", result.profile_name, project_path);
             println!("  {} skills -> {} ({} placements)", result.skills_placed, result.agents_used.join(", "), result.total_placements);
+            logging::log(db, Source::Cli, None, "profile_activate", None, Some(&project_path), "success", &format!("Activated '{}': {} placements", name, result.total_placements)).await?;
         }
         ProfileAction::Deactivate { name, project, global: _ } => {
             let project_path = resolve_project_path(project)?;
             let result = placements::deactivate(db, &name, &project_path).await?;
             println!("Deactivated profile '{}': {} removed, {} kept", result.profile_name, result.files_removed, result.files_kept);
+            logging::log(db, Source::Cli, None, "profile_deactivate", None, Some(&project_path), "success", &format!("Deactivated '{}': {} removed", name, result.files_removed)).await?;
         }
         ProfileAction::Switch { name, project } => {
             let project_path = resolve_project_path(project)?;
@@ -88,6 +94,7 @@ pub async fn run(dirs: &AppDirs, db: &Database, action: ProfileAction) -> Result
             // Activate new profile
             let result = placements::activate(dirs, db, &profiles_config, &agents_config, &name, &project_path, false).await?;
             println!("Switched to profile '{}' ({} placements)", result.profile_name, result.total_placements);
+            logging::log(db, Source::Cli, None, "profile_switch", None, Some(&project_path), "success", &format!("Switched to '{}'", name)).await?;
         }
     }
 
