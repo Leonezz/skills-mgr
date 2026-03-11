@@ -23,6 +23,10 @@ export async function importSkill(sourcePath: string) {
   return await invoke("import_skill", { sourcePath }) as string
 }
 
+export async function importRemoteSkill(url: string) {
+  return await invoke("import_remote_skill", { url }) as string
+}
+
 export async function removeSkill(name: string) {
   return await invoke("remove_skill", { name }) as string
 }

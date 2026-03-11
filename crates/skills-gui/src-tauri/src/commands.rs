@@ -151,6 +151,32 @@ pub async fn import_skill(
 }
 
 #[tauri::command]
+pub async fn import_remote_skill(
+    state: State<'_, AppState>,
+    url: String,
+) -> Result<String, String> {
+    let registry = Registry::new(state.dirs.clone());
+    let name = registry
+        .add_from_remote(&url)
+        .await
+        .map_err(|e| e.to_string())?;
+    let _ = logging::log(
+        &state.db,
+        LogEntry {
+            source: Source::Gui,
+            agent_name: None,
+            operation: "skill_import",
+            params: None,
+            project_path: None,
+            result: "success",
+            details: &format!("Imported skill '{}' from {}", name, url),
+        },
+    )
+    .await;
+    Ok(format!("Imported skill '{}'", name))
+}
+
+#[tauri::command]
 pub async fn read_skill_content(
     state: State<'_, AppState>,
     name: String,

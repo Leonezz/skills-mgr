@@ -21,3 +21,8 @@ chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2"
 anyhow = "1"
 tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["rustls-tls"], default-features = false }
+tar = "0.4"
+flate2 = "1"
+url = "2"
+tempfile = "3"

@@ -19,7 +19,7 @@ import {
   SheetBody,
   SheetFooter,
 } from "@/components/ui/sheet"
-import { listSkills, createSkill, removeSkill, importSkill, updateSkill } from "@/lib/api"
+import { listSkills, createSkill, removeSkill, importSkill, importRemoteSkill, updateSkill } from "@/lib/api"
 import { open } from "@tauri-apps/plugin-dialog"
 import { toast } from "sonner"
 import {
@@ -29,6 +29,7 @@ import {
   MoreVertical,
   FileCode,
   FolderOpen,
+  Globe,
 } from "lucide-react"
 import type { Skill } from "@/lib/schemas"
 
@@ -47,9 +48,11 @@ export function Skills() {
   const [editDesc, setEditDesc] = useState("")
 
   // Add form state
+  const [addMode, setAddMode] = useState<"create" | "local" | "remote">("create")
   const [newName, setNewName] = useState("")
   const [newDesc, setNewDesc] = useState("")
   const [newSourcePath, setNewSourcePath] = useState("")
+  const [remoteUrl, setRemoteUrl] = useState("")
 
   const filteredSkills = useMemo(() => {
     if (!skills) return []
@@ -65,7 +68,10 @@ export function Skills() {
 
   const createMutation = useMutation({
     mutationFn: () => {
-      if (newSourcePath) {
+      if (addMode === "remote") {
+        return importRemoteSkill(remoteUrl)
+      }
+      if (addMode === "local") {
         return importSkill(newSourcePath)
       }
       return createSkill(newName, newDesc || "No description")
@@ -112,9 +118,11 @@ export function Skills() {
 
   function closeAdd() {
     setShowAdd(false)
+    setAddMode("create")
     setNewName("")
     setNewDesc("")
     setNewSourcePath("")
+    setRemoteUrl("")
   }
 
   async function handleBrowseSource() {
@@ -174,51 +182,95 @@ export function Skills() {
             <DialogTitle>Add New Skill</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            <div className="space-y-2">
-              <Label>Skill Name</Label>
-              <Input
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                placeholder="e.g. eslint-config"
-                disabled={!!newSourcePath}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>Description</Label>
-              <Input
-                value={newDesc}
-                onChange={(e) => setNewDesc(e.target.value)}
-                placeholder="Brief description of this skill"
-                disabled={!!newSourcePath}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>Source</Label>
-              <div className="flex gap-2">
-                <div className="flex items-center gap-2 rounded-md border border-border px-3 py-1.5 text-sm text-muted-foreground">
-                  Local File
-                </div>
-                <Input
-                  value={newSourcePath}
-                  onChange={(e) => setNewSourcePath(e.target.value)}
-                  placeholder="~/skills/my-skill/"
-                  className="flex-1"
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={handleBrowseSource}
+            {/* Source mode tabs */}
+            <div className="flex gap-1 rounded-lg bg-muted p-1">
+              {([
+                { key: "create" as const, label: "Create", icon: Plus },
+                { key: "local" as const, label: "Local Import", icon: FolderOpen },
+                { key: "remote" as const, label: "GitHub Import", icon: Globe },
+              ]).map(({ key, label, icon: Icon }) => (
+                <button
+                  key={key}
+                  onClick={() => setAddMode(key)}
+                  className={`flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                    addMode === key
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
                 >
-                  <FolderOpen className="h-4 w-4" />
-                </Button>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                {newSourcePath
-                  ? "Will import from selected folder (name & description read from SKILL.md)"
-                  : "Leave empty to create an empty skill"}
-              </p>
+                  <Icon className="h-3.5 w-3.5" />
+                  {label}
+                </button>
+              ))}
             </div>
+
+            {/* Create mode */}
+            {addMode === "create" && (
+              <>
+                <div className="space-y-2">
+                  <Label>Skill Name</Label>
+                  <Input
+                    value={newName}
+                    onChange={(e) => setNewName(e.target.value)}
+                    placeholder="e.g. eslint-config"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Description</Label>
+                  <Input
+                    value={newDesc}
+                    onChange={(e) => setNewDesc(e.target.value)}
+                    placeholder="Brief description of this skill"
+                  />
+                </div>
+              </>
+            )}
+
+            {/* Local import mode */}
+            {addMode === "local" && (
+              <div className="space-y-2">
+                <Label>Source Folder</Label>
+                <div className="flex gap-2">
+                  <Input
+                    value={newSourcePath}
+                    onChange={(e) => setNewSourcePath(e.target.value)}
+                    placeholder="~/skills/my-skill/"
+                    className="flex-1"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleBrowseSource}
+                  >
+                    <FolderOpen className="h-4 w-4" />
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Select a folder containing SKILL.md. Name and description will be read automatically.
+                </p>
+              </div>
+            )}
+
+            {/* Remote import mode */}
+            {addMode === "remote" && (
+              <div className="space-y-2">
+                <Label>GitHub URL or Shorthand</Label>
+                <Input
+                  value={remoteUrl}
+                  onChange={(e) => setRemoteUrl(e.target.value)}
+                  placeholder="owner/repo/path/to/skill"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Supported formats:
+                </p>
+                <ul className="space-y-0.5 text-xs text-muted-foreground list-disc pl-4">
+                  <li>https://github.com/owner/repo/tree/main/path</li>
+                  <li>owner/repo (imports entire repo)</li>
+                  <li>owner/repo/path/to/skill (imports subdirectory)</li>
+                </ul>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={closeAdd}>
@@ -227,10 +279,17 @@ export function Skills() {
             <Button
               onClick={() => createMutation.mutate()}
               disabled={
-                (!newName && !newSourcePath) || createMutation.isPending
+                createMutation.isPending ||
+                (addMode === "create" && !newName) ||
+                (addMode === "local" && !newSourcePath) ||
+                (addMode === "remote" && !remoteUrl)
               }
             >
-              {createMutation.isPending ? "Adding..." : "Add Skill"}
+              {createMutation.isPending
+                ? addMode === "remote" ? "Downloading..." : "Adding..."
+                : addMode === "remote" ? "Import from GitHub"
+                : addMode === "local" ? "Import Skill"
+                : "Create Skill"}
             </Button>
           </DialogFooter>
         </DialogContent>

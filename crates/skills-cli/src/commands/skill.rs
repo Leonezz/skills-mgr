@@ -111,8 +111,29 @@ pub async fn run(dirs: &AppDirs, db: &Database, action: SkillAction) -> Result<(
                     },
                 )
                 .await?;
+            } else if skills_core::remote::is_remote_source(&source) {
+                println!("Downloading from {}...", source);
+                let name = registry.add_from_remote(&source).await?;
+                println!("Added skill '{}' from remote", name);
+                logging::log(
+                    db,
+                    LogEntry {
+                        source: Source::Cli,
+                        agent_name: None,
+                        operation: "skill_import",
+                        params: None,
+                        project_path: None,
+                        result: "success",
+                        details: &format!("Imported skill '{}' from {}", name, source),
+                    },
+                )
+                .await?;
             } else {
-                println!("Git-based skill import not yet implemented. Use a local path for now.");
+                println!("Source '{}' is not a local path or recognized remote URL.", source);
+                println!("Supported formats:");
+                println!("  Local:  /path/to/skill-dir");
+                println!("  GitHub: https://github.com/owner/repo/tree/main/path");
+                println!("  Short:  owner/repo/path/to/skill");
             }
         }
         SkillAction::Update { name, all } => {

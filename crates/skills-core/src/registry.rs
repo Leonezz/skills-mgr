@@ -3,6 +3,7 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
 use crate::config::{AppDirs, SkillSource, SourceType, SourcesConfig};
+use crate::remote;
 
 /// Metadata parsed from a SKILL.md frontmatter.
 #[derive(Debug, Clone)]
@@ -205,6 +206,47 @@ impl Registry {
         sources.save(&self.dirs.sources_toml())?;
 
         Ok(name)
+    }
+
+    /// Add a skill from a remote GitHub URL or shorthand.
+    ///
+    /// Parses the URL, downloads the tarball, extracts the skill directory,
+    /// copies it to the registry, and records the source metadata.
+    pub async fn add_from_remote(&self, url_or_shorthand: &str) -> Result<String> {
+        let source = remote::parse_github_url(url_or_shorthand)?;
+        let skill_name = remote::derive_skill_name(&source);
+
+        let dest = self.dirs.registry().join(&skill_name);
+        if dest.exists() {
+            bail!("Skill '{}' already exists in registry", skill_name);
+        }
+
+        let (_tmp_dir, skill_dir) = remote::download_github_skill(&source).await?;
+
+        copy_dir_recursive(&skill_dir, &dest)?;
+
+        let hash = compute_tree_hash(&dest)?;
+        let canonical = remote::canonical_url(&source);
+
+        let mut sources = SourcesConfig::load(&self.dirs.sources_toml()).unwrap_or_default();
+        sources.skills.insert(
+            skill_name.clone(),
+            SkillSource {
+                source_type: SourceType::Git,
+                url: Some(canonical),
+                path: source.subpath.clone(),
+                git_ref: Some(source.git_ref.clone()),
+                hash: Some(hash),
+                updated_at: Some(
+                    chrono::Utc::now()
+                        .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+                        .to_string(),
+                ),
+            },
+        );
+        sources.save(&self.dirs.sources_toml())?;
+
+        Ok(skill_name)
     }
 }
 
