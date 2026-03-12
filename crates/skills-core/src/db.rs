@@ -1,7 +1,16 @@
 use anyhow::{Context, Result};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, JoinType,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, RelationTrait, Set, Statement,
+};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::path::Path;
 use std::str::FromStr;
+
+use crate::entity::{
+    operation_log, placement_profiles, placements, project_agents, project_linked_profiles,
+    project_profiles, projects,
+};
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS projects (
@@ -62,7 +71,7 @@ CREATE TABLE IF NOT EXISTS operation_log (
 
 #[derive(Clone)]
 pub struct Database {
-    pool: SqlitePool,
+    conn: DatabaseConnection,
 }
 
 impl Database {
@@ -83,7 +92,8 @@ impl Database {
             .await
             .with_context(|| format!("Failed to open database at {}", path.display()))?;
 
-        let db = Self { pool };
+        let conn = sea_orm::SqlxSqliteConnector::from_sqlx_sqlite_pool(pool);
+        let db = Self { conn };
         db.migrate().await?;
         Ok(db)
     }
@@ -98,69 +108,77 @@ impl Database {
             .connect_with(options)
             .await?;
 
-        let db = Self { pool };
+        let conn = sea_orm::SqlxSqliteConnector::from_sqlx_sqlite_pool(pool);
+        let db = Self { conn };
         db.migrate().await?;
         Ok(db)
     }
 
     async fn migrate(&self) -> Result<()> {
-        sqlx::raw_sql(SCHEMA).execute(&self.pool).await?;
+        let backend = self.conn.get_database_backend();
+        for stmt in SCHEMA.split(';') {
+            let trimmed = stmt.trim();
+            if !trimmed.is_empty() {
+                self.conn
+                    .execute(Statement::from_string(backend, trimmed.to_string()))
+                    .await?;
+            }
+        }
         Ok(())
     }
 
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
+    pub fn conn(&self) -> &DatabaseConnection {
+        &self.conn
     }
 
     // --- Projects ---
 
     pub async fn get_or_create_project(&self, path: &str, name: Option<&str>) -> Result<i64> {
-        let existing: Option<(i64,)> = sqlx::query_as("SELECT id FROM projects WHERE path = ?")
-            .bind(path)
-            .fetch_optional(&self.pool)
+        let existing = projects::Entity::find()
+            .filter(projects::Column::Path.eq(path))
+            .one(&self.conn)
             .await?;
 
-        if let Some((id,)) = existing {
-            return Ok(id);
+        if let Some(project) = existing {
+            return Ok(project.id);
         }
 
-        let result = sqlx::query("INSERT INTO projects (path, name) VALUES (?, ?)")
-            .bind(path)
-            .bind(name)
-            .execute(&self.pool)
-            .await?;
-
-        Ok(result.last_insert_rowid())
+        let model = projects::ActiveModel {
+            path: Set(path.to_string()),
+            name: Set(name.map(|n| n.to_string())),
+            ..Default::default()
+        };
+        let result = projects::Entity::insert(model).exec(&self.conn).await?;
+        Ok(result.last_insert_id)
     }
 
     pub async fn list_all_projects(&self) -> Result<Vec<ProjectRow>> {
-        let rows =
-            sqlx::query_as::<_, ProjectRow>("SELECT id, path, name FROM projects ORDER BY id")
-                .fetch_all(&self.pool)
-                .await?;
-        Ok(rows)
+        let rows = projects::Entity::find()
+            .order_by_asc(projects::Column::Id)
+            .all(&self.conn)
+            .await?;
+        Ok(rows.into_iter().map(ProjectRow::from).collect())
     }
 
     pub async fn delete_project(&self, project_id: i64) -> Result<()> {
-        sqlx::query("DELETE FROM placements WHERE project_id = ?")
-            .bind(project_id)
-            .execute(&self.pool)
+        placements::Entity::delete_many()
+            .filter(placements::Column::ProjectId.eq(project_id))
+            .exec(&self.conn)
             .await?;
-        sqlx::query("DELETE FROM project_profiles WHERE project_id = ?")
-            .bind(project_id)
-            .execute(&self.pool)
+        project_profiles::Entity::delete_many()
+            .filter(project_profiles::Column::ProjectId.eq(project_id))
+            .exec(&self.conn)
             .await?;
-        sqlx::query("DELETE FROM project_linked_profiles WHERE project_id = ?")
-            .bind(project_id)
-            .execute(&self.pool)
+        project_linked_profiles::Entity::delete_many()
+            .filter(project_linked_profiles::Column::ProjectId.eq(project_id))
+            .exec(&self.conn)
             .await?;
-        sqlx::query("DELETE FROM project_agents WHERE project_id = ?")
-            .bind(project_id)
-            .execute(&self.pool)
+        project_agents::Entity::delete_many()
+            .filter(project_agents::Column::ProjectId.eq(project_id))
+            .exec(&self.conn)
             .await?;
-        sqlx::query("DELETE FROM projects WHERE id = ?")
-            .bind(project_id)
-            .execute(&self.pool)
+        projects::Entity::delete_by_id(project_id)
+            .exec(&self.conn)
             .await?;
         Ok(())
     }
@@ -181,32 +199,30 @@ impl Database {
         let now = chrono::Utc::now()
             .format("%Y-%m-%dT%H:%M:%S%.3fZ")
             .to_string();
-        sqlx::query(
-            "INSERT INTO operation_log (timestamp, source, agent_name, operation, params, project_path, result, details)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&now)
-        .bind(source)
-        .bind(agent_name)
-        .bind(operation)
-        .bind(params)
-        .bind(project_path)
-        .bind(result)
-        .bind(details)
-        .execute(&self.pool)
-        .await?;
+        let model = operation_log::ActiveModel {
+            timestamp: Set(now),
+            source: Set(source.to_string()),
+            agent_name: Set(agent_name.map(|s| s.to_string())),
+            operation: Set(operation.to_string()),
+            params: Set(params.map(|s| s.to_string())),
+            project_path: Set(project_path.map(|s| s.to_string())),
+            result: Set(result.to_string()),
+            details: Set(details.map(|s| s.to_string())),
+            ..Default::default()
+        };
+        operation_log::Entity::insert(model)
+            .exec(&self.conn)
+            .await?;
         Ok(())
     }
 
     pub async fn get_recent_logs(&self, limit: i64) -> Result<Vec<LogEntry>> {
-        let rows = sqlx::query_as::<_, LogEntry>(
-            "SELECT id, timestamp, source, agent_name, operation, params, project_path, result, details
-             FROM operation_log ORDER BY id DESC LIMIT ?",
-        )
-        .bind(limit)
-        .fetch_all(&self.pool)
-        .await?;
-        Ok(rows)
+        let rows = operation_log::Entity::find()
+            .order_by_desc(operation_log::Column::Id)
+            .limit(limit as u64)
+            .all(&self.conn)
+            .await?;
+        Ok(rows.into_iter().map(LogEntry::from).collect())
     }
 
     // --- Placements ---
@@ -221,21 +237,32 @@ impl Database {
         let now = chrono::Utc::now()
             .format("%Y-%m-%dT%H:%M:%S%.3fZ")
             .to_string();
-        let result = sqlx::query(
-            "INSERT INTO placements (project_id, skill_name, agent_name, target_path, placed_at)
-             VALUES (?, ?, ?, ?, ?)
-             ON CONFLICT (project_id, skill_name, agent_name) DO UPDATE SET placed_at = excluded.placed_at
-             RETURNING id",
-        )
-        .bind(project_id)
-        .bind(skill_name)
-        .bind(agent_name)
-        .bind(target_path)
-        .bind(&now)
-        .fetch_one(&self.pool)
-        .await?;
 
-        Ok(sqlx::Row::get::<i64, _>(&result, 0))
+        let existing = placements::Entity::find()
+            .filter(placements::Column::ProjectId.eq(project_id))
+            .filter(placements::Column::SkillName.eq(skill_name))
+            .filter(placements::Column::AgentName.eq(agent_name))
+            .one(&self.conn)
+            .await?;
+
+        if let Some(row) = existing {
+            let id = row.id;
+            let mut active: placements::ActiveModel = row.into();
+            active.placed_at = Set(now);
+            active.update(&self.conn).await?;
+            Ok(id)
+        } else {
+            let model = placements::ActiveModel {
+                project_id: Set(project_id),
+                skill_name: Set(skill_name.to_string()),
+                agent_name: Set(agent_name.to_string()),
+                target_path: Set(target_path.to_string()),
+                placed_at: Set(now),
+                ..Default::default()
+            };
+            let result = placements::Entity::insert(model).exec(&self.conn).await?;
+            Ok(result.last_insert_id)
+        }
     }
 
     pub async fn link_placement_profile(
@@ -243,13 +270,21 @@ impl Database {
         placement_id: i64,
         profile_name: &str,
     ) -> Result<()> {
-        sqlx::query(
-            "INSERT OR IGNORE INTO placement_profiles (placement_id, profile_name) VALUES (?, ?)",
-        )
-        .bind(placement_id)
-        .bind(profile_name)
-        .execute(&self.pool)
-        .await?;
+        let existing = placement_profiles::Entity::find()
+            .filter(placement_profiles::Column::PlacementId.eq(placement_id))
+            .filter(placement_profiles::Column::ProfileName.eq(profile_name))
+            .one(&self.conn)
+            .await?;
+
+        if existing.is_none() {
+            let model = placement_profiles::ActiveModel {
+                placement_id: Set(placement_id),
+                profile_name: Set(profile_name.to_string()),
+            };
+            placement_profiles::Entity::insert(model)
+                .exec(&self.conn)
+                .await?;
+        }
         Ok(())
     }
 
@@ -258,27 +293,25 @@ impl Database {
         placement_id: i64,
         profile_name: &str,
     ) -> Result<()> {
-        sqlx::query("DELETE FROM placement_profiles WHERE placement_id = ? AND profile_name = ?")
-            .bind(placement_id)
-            .bind(profile_name)
-            .execute(&self.pool)
+        placement_profiles::Entity::delete_many()
+            .filter(placement_profiles::Column::PlacementId.eq(placement_id))
+            .filter(placement_profiles::Column::ProfileName.eq(profile_name))
+            .exec(&self.conn)
             .await?;
         Ok(())
     }
 
     pub async fn get_placement_profile_count(&self, placement_id: i64) -> Result<i64> {
-        let row: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM placement_profiles WHERE placement_id = ?")
-                .bind(placement_id)
-                .fetch_one(&self.pool)
-                .await?;
-        Ok(row.0)
+        let count = placement_profiles::Entity::find()
+            .filter(placement_profiles::Column::PlacementId.eq(placement_id))
+            .count(&self.conn)
+            .await?;
+        Ok(count as i64)
     }
 
     pub async fn delete_placement(&self, placement_id: i64) -> Result<()> {
-        sqlx::query("DELETE FROM placements WHERE id = ?")
-            .bind(placement_id)
-            .execute(&self.pool)
+        placements::Entity::delete_by_id(placement_id)
+            .exec(&self.conn)
             .await?;
         Ok(())
     }
@@ -288,42 +321,35 @@ impl Database {
         project_id: i64,
         profile_name: &str,
     ) -> Result<Vec<PlacementRow>> {
-        let rows = sqlx::query_as::<_, PlacementRow>(
-            "SELECT p.id, p.project_id, p.skill_name, p.agent_name, p.target_path, p.placed_at
-             FROM placements p
-             JOIN placement_profiles pp ON p.id = pp.placement_id
-             WHERE p.project_id = ? AND pp.profile_name = ?",
-        )
-        .bind(project_id)
-        .bind(profile_name)
-        .fetch_all(&self.pool)
-        .await?;
-        Ok(rows)
+        let rows = placements::Entity::find()
+            .join(
+                JoinType::InnerJoin,
+                placements::Relation::PlacementProfiles.def(),
+            )
+            .filter(placements::Column::ProjectId.eq(project_id))
+            .filter(placement_profiles::Column::ProfileName.eq(profile_name))
+            .all(&self.conn)
+            .await?;
+        Ok(rows.into_iter().map(PlacementRow::from).collect())
     }
 
     pub async fn get_all_placements_for_project(
         &self,
         project_id: i64,
     ) -> Result<Vec<PlacementRow>> {
-        let rows = sqlx::query_as::<_, PlacementRow>(
-            "SELECT id, project_id, skill_name, agent_name, target_path, placed_at
-             FROM placements WHERE project_id = ?",
-        )
-        .bind(project_id)
-        .fetch_all(&self.pool)
-        .await?;
-        Ok(rows)
+        let rows = placements::Entity::find()
+            .filter(placements::Column::ProjectId.eq(project_id))
+            .all(&self.conn)
+            .await?;
+        Ok(rows.into_iter().map(PlacementRow::from).collect())
     }
 
     pub async fn get_placements_for_skill(&self, skill_name: &str) -> Result<Vec<PlacementRow>> {
-        let rows = sqlx::query_as::<_, PlacementRow>(
-            "SELECT id, project_id, skill_name, agent_name, target_path, placed_at
-             FROM placements WHERE skill_name = ?",
-        )
-        .bind(skill_name)
-        .fetch_all(&self.pool)
-        .await?;
-        Ok(rows)
+        let rows = placements::Entity::find()
+            .filter(placements::Column::SkillName.eq(skill_name))
+            .all(&self.conn)
+            .await?;
+        Ok(rows.into_iter().map(PlacementRow::from).collect())
     }
 
     pub async fn find_conflict(
@@ -331,15 +357,12 @@ impl Database {
         project_id: i64,
         target_path: &str,
     ) -> Result<Option<PlacementRow>> {
-        let row = sqlx::query_as::<_, PlacementRow>(
-            "SELECT id, project_id, skill_name, agent_name, target_path, placed_at
-             FROM placements WHERE project_id = ? AND target_path = ?",
-        )
-        .bind(project_id)
-        .bind(target_path)
-        .fetch_optional(&self.pool)
-        .await?;
-        Ok(row)
+        let row = placements::Entity::find()
+            .filter(placements::Column::ProjectId.eq(project_id))
+            .filter(placements::Column::TargetPath.eq(target_path))
+            .one(&self.conn)
+            .await?;
+        Ok(row.map(PlacementRow::from))
     }
 
     // --- Project Profiles ---
@@ -349,17 +372,25 @@ impl Database {
         project_id: i64,
         profile_name: &str,
     ) -> Result<()> {
-        let now = chrono::Utc::now()
-            .format("%Y-%m-%dT%H:%M:%S%.3fZ")
-            .to_string();
-        sqlx::query(
-            "INSERT OR IGNORE INTO project_profiles (project_id, profile_name, activated_at) VALUES (?, ?, ?)",
-        )
-        .bind(project_id)
-        .bind(profile_name)
-        .bind(&now)
-        .execute(&self.pool)
-        .await?;
+        let existing = project_profiles::Entity::find()
+            .filter(project_profiles::Column::ProjectId.eq(project_id))
+            .filter(project_profiles::Column::ProfileName.eq(profile_name))
+            .one(&self.conn)
+            .await?;
+
+        if existing.is_none() {
+            let now = chrono::Utc::now()
+                .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+                .to_string();
+            let model = project_profiles::ActiveModel {
+                project_id: Set(project_id),
+                profile_name: Set(profile_name.to_string()),
+                activated_at: Set(now),
+            };
+            project_profiles::Entity::insert(model)
+                .exec(&self.conn)
+                .await?;
+        }
         Ok(())
     }
 
@@ -368,10 +399,10 @@ impl Database {
         project_id: i64,
         profile_name: &str,
     ) -> Result<()> {
-        sqlx::query("DELETE FROM project_profiles WHERE project_id = ? AND profile_name = ?")
-            .bind(project_id)
-            .bind(profile_name)
-            .execute(&self.pool)
+        project_profiles::Entity::delete_many()
+            .filter(project_profiles::Column::ProjectId.eq(project_id))
+            .filter(project_profiles::Column::ProfileName.eq(profile_name))
+            .exec(&self.conn)
             .await?;
         Ok(())
     }
@@ -384,69 +415,85 @@ impl Database {
         agent_name: &str,
         enabled: bool,
     ) -> Result<()> {
-        sqlx::query(
-            "INSERT INTO project_agents (project_id, agent_name, enabled) VALUES (?, ?, ?)
-             ON CONFLICT (project_id, agent_name) DO UPDATE SET enabled = excluded.enabled",
-        )
-        .bind(project_id)
-        .bind(agent_name)
-        .bind(enabled as i32)
-        .execute(&self.pool)
-        .await?;
+        let existing = project_agents::Entity::find()
+            .filter(project_agents::Column::ProjectId.eq(project_id))
+            .filter(project_agents::Column::AgentName.eq(agent_name))
+            .one(&self.conn)
+            .await?;
+
+        if let Some(row) = existing {
+            let mut active: project_agents::ActiveModel = row.into();
+            active.enabled = Set(enabled as i32);
+            active.update(&self.conn).await?;
+        } else {
+            let model = project_agents::ActiveModel {
+                project_id: Set(project_id),
+                agent_name: Set(agent_name.to_string()),
+                enabled: Set(enabled as i32),
+            };
+            project_agents::Entity::insert(model)
+                .exec(&self.conn)
+                .await?;
+        }
         Ok(())
     }
 
     pub async fn is_agent_enabled(&self, project_id: i64, agent_name: &str) -> Result<bool> {
-        let row: Option<(i32,)> = sqlx::query_as(
-            "SELECT enabled FROM project_agents WHERE project_id = ? AND agent_name = ?",
-        )
-        .bind(project_id)
-        .bind(agent_name)
-        .fetch_optional(&self.pool)
-        .await?;
-        Ok(row.map(|(e,)| e != 0).unwrap_or(true))
+        let row = project_agents::Entity::find()
+            .filter(project_agents::Column::ProjectId.eq(project_id))
+            .filter(project_agents::Column::AgentName.eq(agent_name))
+            .one(&self.conn)
+            .await?;
+        Ok(row.map(|r| r.enabled != 0).unwrap_or(true))
     }
 
     pub async fn get_active_profiles(&self, project_id: i64) -> Result<Vec<String>> {
-        let rows: Vec<(String,)> = sqlx::query_as(
-            "SELECT profile_name FROM project_profiles WHERE project_id = ? ORDER BY activated_at",
-        )
-        .bind(project_id)
-        .fetch_all(&self.pool)
-        .await?;
-        Ok(rows.into_iter().map(|(name,)| name).collect())
+        let rows = project_profiles::Entity::find()
+            .filter(project_profiles::Column::ProjectId.eq(project_id))
+            .order_by_asc(project_profiles::Column::ActivatedAt)
+            .all(&self.conn)
+            .await?;
+        Ok(rows.into_iter().map(|r| r.profile_name).collect())
     }
 
     pub async fn get_projects_for_profile(
         &self,
         profile_name: &str,
     ) -> Result<Vec<(String, Option<String>)>> {
-        let rows: Vec<(String, Option<String>)> = sqlx::query_as(
-            "SELECT p.path, p.name FROM projects p
-             INNER JOIN project_profiles pp ON p.id = pp.project_id
-             WHERE pp.profile_name = ?
-             ORDER BY pp.activated_at",
-        )
-        .bind(profile_name)
-        .fetch_all(&self.pool)
-        .await?;
-        Ok(rows)
+        let rows = projects::Entity::find()
+            .join(
+                JoinType::InnerJoin,
+                projects::Relation::ProjectProfiles.def(),
+            )
+            .filter(project_profiles::Column::ProfileName.eq(profile_name))
+            .order_by_asc(project_profiles::Column::ActivatedAt)
+            .all(&self.conn)
+            .await?;
+        Ok(rows.into_iter().map(|r| (r.path, r.name)).collect())
     }
 
     // --- Project Linked Profiles ---
 
     pub async fn link_profile_to_project(&self, project_id: i64, profile_name: &str) -> Result<()> {
-        let now = chrono::Utc::now()
-            .format("%Y-%m-%dT%H:%M:%S%.3fZ")
-            .to_string();
-        sqlx::query(
-            "INSERT OR IGNORE INTO project_linked_profiles (project_id, profile_name, linked_at) VALUES (?, ?, ?)",
-        )
-        .bind(project_id)
-        .bind(profile_name)
-        .bind(&now)
-        .execute(&self.pool)
-        .await?;
+        let existing = project_linked_profiles::Entity::find()
+            .filter(project_linked_profiles::Column::ProjectId.eq(project_id))
+            .filter(project_linked_profiles::Column::ProfileName.eq(profile_name))
+            .one(&self.conn)
+            .await?;
+
+        if existing.is_none() {
+            let now = chrono::Utc::now()
+                .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+                .to_string();
+            let model = project_linked_profiles::ActiveModel {
+                project_id: Set(project_id),
+                profile_name: Set(profile_name.to_string()),
+                linked_at: Set(now),
+            };
+            project_linked_profiles::Entity::insert(model)
+                .exec(&self.conn)
+                .await?;
+        }
         Ok(())
     }
 
@@ -455,35 +502,42 @@ impl Database {
         project_id: i64,
         profile_name: &str,
     ) -> Result<()> {
-        sqlx::query(
-            "DELETE FROM project_linked_profiles WHERE project_id = ? AND profile_name = ?",
-        )
-        .bind(project_id)
-        .bind(profile_name)
-        .execute(&self.pool)
-        .await?;
+        project_linked_profiles::Entity::delete_many()
+            .filter(project_linked_profiles::Column::ProjectId.eq(project_id))
+            .filter(project_linked_profiles::Column::ProfileName.eq(profile_name))
+            .exec(&self.conn)
+            .await?;
         Ok(())
     }
 
     pub async fn get_linked_profiles(&self, project_id: i64) -> Result<Vec<String>> {
-        let rows: Vec<(String,)> = sqlx::query_as(
-            "SELECT profile_name FROM project_linked_profiles WHERE project_id = ? ORDER BY linked_at",
-        )
-        .bind(project_id)
-        .fetch_all(&self.pool)
-        .await?;
-        Ok(rows.into_iter().map(|(name,)| name).collect())
+        let rows = project_linked_profiles::Entity::find()
+            .filter(project_linked_profiles::Column::ProjectId.eq(project_id))
+            .order_by_asc(project_linked_profiles::Column::LinkedAt)
+            .all(&self.conn)
+            .await?;
+        Ok(rows.into_iter().map(|r| r.profile_name).collect())
     }
 }
 
-#[derive(Debug, sqlx::FromRow)]
+#[derive(Debug)]
 pub struct ProjectRow {
     pub id: i64,
     pub path: String,
     pub name: Option<String>,
 }
 
-#[derive(Debug, sqlx::FromRow)]
+impl From<projects::Model> for ProjectRow {
+    fn from(m: projects::Model) -> Self {
+        Self {
+            id: m.id,
+            path: m.path,
+            name: m.name,
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct PlacementRow {
     pub id: i64,
     pub project_id: i64,
@@ -493,7 +547,20 @@ pub struct PlacementRow {
     pub placed_at: String,
 }
 
-#[derive(Debug, sqlx::FromRow)]
+impl From<placements::Model> for PlacementRow {
+    fn from(m: placements::Model) -> Self {
+        Self {
+            id: m.id,
+            project_id: m.project_id,
+            skill_name: m.skill_name,
+            agent_name: m.agent_name,
+            target_path: m.target_path,
+            placed_at: m.placed_at,
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct LogEntry {
     pub id: i64,
     pub timestamp: String,
@@ -506,6 +573,22 @@ pub struct LogEntry {
     pub details: Option<String>,
 }
 
+impl From<operation_log::Model> for LogEntry {
+    fn from(m: operation_log::Model) -> Self {
+        Self {
+            id: m.id,
+            timestamp: m.timestamp,
+            source: m.source,
+            agent_name: m.agent_name,
+            operation: m.operation,
+            params: m.params,
+            project_path: m.project_path,
+            result: m.result,
+            details: m.details,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -513,7 +596,8 @@ mod tests {
     #[tokio::test]
     async fn test_open_memory_db() {
         let db = Database::open_memory().await.unwrap();
-        assert!(db.pool().acquire().await.is_ok());
+        let projects = db.list_all_projects().await.unwrap();
+        assert!(projects.is_empty());
     }
 
     #[tokio::test]
