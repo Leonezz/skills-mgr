@@ -19,7 +19,7 @@ import {
   SheetBody,
   SheetFooter,
 } from "@/components/ui/sheet"
-import { listSkills, createSkill, removeSkill, importSkill, importRemoteSkill, listRemoteSkills, updateSkill } from "@/lib/api"
+import { listSkills, createSkill, removeSkill, importSkill, importRemoteSkill, browseRemote, importFromBrowse, openSkillDir, updateSkill } from "@/lib/api"
 import type { RemoteSkillEntry } from "@/lib/api"
 import { open } from "@tauri-apps/plugin-dialog"
 import { toast } from "sonner"
@@ -33,6 +33,7 @@ import {
   Globe,
   Loader2,
   Check,
+  ExternalLink,
 } from "lucide-react"
 import type { Skill } from "@/lib/schemas"
 
@@ -84,33 +85,16 @@ export function Skills() {
         return importRemoteSkill(newName)
       }
       if (addMode === "remote") {
-        // Batch import selected skills from a browsed collection
+        // If we have browsed skills selected, import from cached staging
         if (remoteSkills.length > 0 && selectedRemote.size > 0) {
-          const results: string[] = []
-          const errors: string[] = []
-          for (const entry of remoteSkills) {
-            if (!selectedRemote.has(entry.subpath)) continue
-            const source = remoteUrl.startsWith("http")
-              ? remoteUrl.replace(/\/tree\/[^/]+.*$/, "") + "/tree/main/" + entry.subpath
-              : remoteUrl.split("/").slice(0, 2).join("/") + "/" + entry.subpath
-            try {
-              const msg = await importRemoteSkill(source)
-              results.push(msg)
-            } catch (e) {
-              errors.push(`${entry.name}: ${e}`)
-            }
-          }
-          if (errors.length > 0) {
-            throw new Error(`Imported ${results.length}, failed ${errors.length}: ${errors[0]}`)
-          }
-          return `Imported ${results.length} skill${results.length !== 1 ? "s" : ""}`
+          const selected = [...selectedRemote]
+          return importFromBrowse(selected)
         }
         return importRemoteSkill(remoteUrl)
       }
       if (addMode === "local") {
         return importSkill(newSourcePath)
       }
-      // Validate skill name doesn't contain path separators
       if (newName.includes("/") || newName.includes("\\")) {
         return Promise.reject(new Error("Skill name cannot contain '/' or '\\'. Did you mean to use GitHub Import?"))
       }
@@ -176,12 +160,17 @@ export function Skills() {
     setRemoteSkills([])
     setSelectedRemote(new Set())
     try {
-      const skills = await listRemoteSkills(remoteUrl.trim())
+      const skills = await browseRemote(remoteUrl.trim())
       if (skills.length === 0) {
         setBrowseError("No skills found in this repository.")
+      } else if (skills.length === 1) {
+        // Single skill — import directly from staging
+        const msg = await importFromBrowse([skills[0].subpath])
+        toast.success(msg)
+        queryClient.invalidateQueries({ queryKey: ["skills"] })
+        closeAdd()
       } else {
         setRemoteSkills(skills)
-        // Auto-select all by default
         setSelectedRemote(new Set(skills.map((s) => s.subpath)))
       }
     } catch (e) {
@@ -244,7 +233,7 @@ export function Skills() {
 
       {/* Add Skill Dialog */}
       <Dialog open={showAdd} onOpenChange={(o) => { if (!o) closeAdd() }}>
-        <DialogContent>
+        <DialogContent className={remoteSkills.length > 0 ? "max-w-lg" : undefined}>
           <DialogHeader>
             <DialogTitle>Add New Skill</DialogTitle>
           </DialogHeader>
@@ -324,53 +313,50 @@ export function Skills() {
               <div className="space-y-3">
                 <div className="space-y-2">
                   <Label>GitHub URL or Shorthand</Label>
-                  <div className="flex gap-2">
-                    <Input
-                      value={remoteUrl}
-                      onChange={(e) => {
-                        setRemoteUrl(e.target.value)
-                        setRemoteSkills([])
-                        setSelectedRemote(new Set())
-                        setBrowseError("")
-                      }}
-                      placeholder="owner/repo or owner/repo/path/to/skill"
-                      className="flex-1"
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault()
-                          handleBrowseRemote()
-                        }
-                      }}
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={handleBrowseRemote}
-                      disabled={browseLoading || !remoteUrl.trim()}
-                    >
-                      {browseLoading ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <Search className="h-4 w-4" />
-                      )}
-                    </Button>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    Enter a repo URL and press Browse to discover available skills, or provide a direct path to import.
-                  </p>
+                  <Input
+                    value={remoteUrl}
+                    onChange={(e) => {
+                      setRemoteUrl(e.target.value)
+                      setRemoteSkills([])
+                      setSelectedRemote(new Set())
+                      setBrowseError("")
+                    }}
+                    placeholder="owner/repo or https://github.com/owner/repo"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault()
+                        handleBrowseRemote()
+                      }
+                    }}
+                  />
+                  {!remoteSkills.length && !browseLoading && !browseError && (
+                    <p className="text-xs text-muted-foreground">
+                      Enter a repository URL and click Import. Single-skill repos are imported directly.
+                      Multi-skill collections let you pick which skills to import.
+                    </p>
+                  )}
                 </div>
+
+                {/* Loading state */}
+                {browseLoading && (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Downloading and scanning repository...
+                  </div>
+                )}
 
                 {/* Browse error */}
                 {browseError && (
                   <p className="text-xs text-destructive">{browseError}</p>
                 )}
 
-                {/* Discovered skills list */}
+                {/* Discovered skills — selectable card grid */}
                 {remoteSkills.length > 0 && (
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
-                      <Label>Available Skills ({remoteSkills.length})</Label>
+                      <Label>
+                        Found {remoteSkills.length} skills — select to import
+                      </Label>
                       <button
                         type="button"
                         className="text-xs text-primary hover:underline"
@@ -385,44 +371,47 @@ export function Skills() {
                         {selectedRemote.size === remoteSkills.length ? "Deselect All" : "Select All"}
                       </button>
                     </div>
-                    <div className="max-h-48 overflow-y-auto rounded-md border border-border">
-                      {remoteSkills.map((entry) => (
-                        <label
-                          key={entry.subpath}
-                          className="flex cursor-pointer items-center gap-3 px-3 py-2 transition-colors hover:bg-muted/50"
-                          onClick={() => {
-                            setSelectedRemote((prev) => {
-                              const next = new Set(prev)
-                              if (next.has(entry.subpath)) next.delete(entry.subpath)
-                              else next.add(entry.subpath)
-                              return next
-                            })
-                          }}
-                        >
-                          <div
-                            className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors ${
-                              selectedRemote.has(entry.subpath)
-                                ? "border-primary bg-primary text-primary-foreground"
-                                : "border-muted-foreground/30"
+                    <div className="grid grid-cols-2 gap-2 max-h-56 overflow-y-auto">
+                      {remoteSkills.map((entry) => {
+                        const isSelected = selectedRemote.has(entry.subpath)
+                        return (
+                          <button
+                            key={entry.subpath}
+                            type="button"
+                            onClick={() => {
+                              setSelectedRemote((prev) => {
+                                const next = new Set(prev)
+                                if (next.has(entry.subpath)) next.delete(entry.subpath)
+                                else next.add(entry.subpath)
+                                return next
+                              })
+                            }}
+                            className={`flex items-start gap-2.5 rounded-lg border p-3 text-left transition-colors ${
+                              isSelected
+                                ? "border-primary bg-primary/5"
+                                : "border-border hover:border-muted-foreground/30"
                             }`}
                           >
-                            {selectedRemote.has(entry.subpath) && (
-                              <Check className="h-3 w-3" />
-                            )}
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <p className="text-sm font-medium truncate">{entry.name}</p>
-                            {entry.description && (
-                              <p className="text-xs text-muted-foreground truncate">
-                                {entry.description}
-                              </p>
-                            )}
-                          </div>
-                          <span className="shrink-0 text-[10px] font-mono text-muted-foreground">
-                            {entry.subpath}
-                          </span>
-                        </label>
-                      ))}
+                            <div
+                              className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors ${
+                                isSelected
+                                  ? "border-primary bg-primary text-primary-foreground"
+                                  : "border-muted-foreground/30"
+                              }`}
+                            >
+                              {isSelected && <Check className="h-3 w-3" />}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="text-sm font-medium truncate">{entry.name}</p>
+                              {entry.description && (
+                                <p className="text-xs text-muted-foreground line-clamp-2 mt-0.5">
+                                  {entry.description}
+                                </p>
+                              )}
+                            </div>
+                          </button>
+                        )
+                      })}
                     </div>
                   </div>
                 )}
@@ -434,7 +423,13 @@ export function Skills() {
               Cancel
             </Button>
             <Button
-              onClick={() => createMutation.mutate()}
+              onClick={() => {
+                if (addMode === "remote" && remoteSkills.length === 0) {
+                  handleBrowseRemote()
+                } else {
+                  createMutation.mutate()
+                }
+              }}
               disabled={
                 createMutation.isPending ||
                 browseLoading ||
@@ -444,14 +439,16 @@ export function Skills() {
                 (addMode === "remote" && remoteSkills.length > 0 && selectedRemote.size === 0)
               }
             >
-              {createMutation.isPending
-                ? addMode === "remote" ? "Importing..." : "Adding..."
-                : addMode === "remote"
-                  ? remoteSkills.length > 0
-                    ? `Import ${selectedRemote.size} Skill${selectedRemote.size !== 1 ? "s" : ""}`
-                    : "Import from GitHub"
-                : addMode === "local" ? "Import Skill"
-                : "Create Skill"}
+              {browseLoading
+                ? "Scanning..."
+                : createMutation.isPending
+                  ? "Importing..."
+                  : addMode === "remote"
+                    ? remoteSkills.length > 0
+                      ? `Import ${selectedRemote.size} Skill${selectedRemote.size !== 1 ? "s" : ""}`
+                      : "Import from GitHub"
+                  : addMode === "local" ? "Import Skill"
+                  : "Create Skill"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -583,6 +580,18 @@ export function Skills() {
             </div>
           </SheetBody>
           <SheetFooter>
+            <Button
+              variant="outline"
+              className="shrink-0"
+              onClick={() => {
+                if (detail) {
+                  openSkillDir(detail.name).catch((e) => toast.error(String(e)))
+                }
+              }}
+            >
+              <ExternalLink className="h-4 w-4" />
+              Open in Finder
+            </Button>
             <Button className="flex-1" onClick={() => { if (detail) openEdit(detail) }}>
               Edit Skill
             </Button>

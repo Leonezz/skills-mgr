@@ -33,9 +33,17 @@ export interface RemoteSkillEntry {
   subpath: string
 }
 
-export async function listRemoteSkills(url: string) {
-  const data = await invoke("list_remote_skills", { url })
+export async function browseRemote(url: string) {
+  const data = await invoke("browse_remote", { url })
   return data as RemoteSkillEntry[]
+}
+
+export async function importFromBrowse(subpaths: string[]) {
+  return await invoke("import_from_browse", { subpaths }) as string
+}
+
+export async function openSkillDir(name: string) {
+  await invoke("open_skill_dir", { name })
 }
 
 export async function removeSkill(name: string) {

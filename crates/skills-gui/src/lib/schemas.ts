@@ -6,6 +6,7 @@ export const SkillSchema = z.object({
   files: z.array(z.string()),
   source_type: z.string().nullable(),
   is_builtin: z.boolean(),
+  dir_path: z.string(),
 })
 
 export const ProfileSchema = z.object({

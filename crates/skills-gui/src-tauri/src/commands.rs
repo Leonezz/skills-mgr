@@ -18,6 +18,7 @@ pub struct SkillInfo {
     pub files: Vec<String>,
     pub source_type: Option<String>,
     pub is_builtin: bool,
+    pub dir_path: String,
 }
 
 #[derive(Serialize)]
@@ -62,6 +63,7 @@ pub async fn list_skills(state: State<'_, AppState>) -> Result<Vec<SkillInfo>, S
         .into_iter()
         .map(|s| {
             let is_builtin = BUILTIN_SKILLS.contains(&s.name.as_str());
+            let dir_path = s.dir_path.to_string_lossy().to_string();
             SkillInfo {
                 name: s.name,
                 description: s.description,
@@ -70,6 +72,7 @@ pub async fn list_skills(state: State<'_, AppState>) -> Result<Vec<SkillInfo>, S
                     .source
                     .map(|src| format!("{:?}", src.source_type).to_lowercase()),
                 is_builtin,
+                dir_path,
             }
         })
         .collect())
@@ -198,17 +201,19 @@ pub async fn import_remote_skill(
 }
 
 #[tauri::command]
-pub async fn list_remote_skills(
+pub async fn browse_remote(
     state: State<'_, AppState>,
     url: String,
 ) -> Result<Vec<serde_json::Value>, String> {
-    tracing::info!(url = %url, "Listing remote skills");
-    let registry = Registry::new(state.dirs.clone());
-    let skills = registry
-        .list_remote_skills(&url)
+    tracing::info!(url = %url, "Browsing remote repo");
+    let source = skills_core::remote::parse_github_url(&url).map_err(|e| e.to_string())?;
+    let staging_dir = state.dirs.cache().join("staging");
+
+    let skills = skills_core::remote::download_to_staging(&source, &staging_dir)
         .await
         .map_err(|e| e.to_string())?;
-    tracing::info!(count = skills.len(), "Found remote skills");
+
+    tracing::info!(count = skills.len(), "Found skills in remote repo");
     Ok(skills
         .into_iter()
         .map(|s| {
@@ -219,6 +224,119 @@ pub async fn list_remote_skills(
             })
         })
         .collect())
+}
+
+#[tauri::command]
+pub async fn import_from_browse(
+    state: State<'_, AppState>,
+    subpaths: Vec<String>,
+) -> Result<String, String> {
+    let staging_dir = state.dirs.cache().join("staging");
+    let meta_path = staging_dir.join("meta.json");
+    let repo_dir = staging_dir.join("repo");
+
+    if !meta_path.exists() {
+        return Err("No browse session active. Please browse a repository first.".to_string());
+    }
+
+    let meta: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&meta_path).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+    let owner = meta["owner"].as_str().unwrap_or_default();
+    let repo = meta["repo"].as_str().unwrap_or_default();
+    let git_ref = meta["git_ref"].as_str().unwrap_or("main");
+
+    let registry = Registry::new(state.dirs.clone());
+    let mut imported: Vec<String> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+
+    for subpath in &subpaths {
+        let source_dir = repo_dir.join(subpath);
+        let skill_name = source_dir
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        tracing::info!(skill = %skill_name, subpath = %subpath, "Importing from browse");
+        match registry.import_from_extracted_dir(&source_dir, &skill_name, owner, repo, git_ref, subpath) {
+            Ok(()) => imported.push(skill_name),
+            Err(e) => {
+                tracing::error!(skill = %skill_name, error = %e, "Failed to import");
+                errors.push(format!("{}: {}", skill_name, e));
+            }
+        }
+    }
+
+    // Clean up staging
+    let _ = std::fs::remove_dir_all(&staging_dir);
+
+    // Log to DB
+    let details = if errors.is_empty() {
+        format!("Imported {} skills: {}", imported.len(), imported.join(", "))
+    } else {
+        format!(
+            "Imported {}, failed {}: {}",
+            imported.len(),
+            errors.len(),
+            errors.join("; ")
+        )
+    };
+    let _ = logging::log(
+        &state.db,
+        LogEntry {
+            source: Source::Gui,
+            agent_name: None,
+            operation: "skill_import_remote_batch",
+            params: None,
+            project_path: None,
+            result: if errors.is_empty() { "success" } else { "partial" },
+            details: &details,
+        },
+    )
+    .await;
+
+    if !errors.is_empty() {
+        return Err(format!(
+            "Imported {}, failed {}: {}",
+            imported.len(),
+            errors.len(),
+            errors[0]
+        ));
+    }
+    Ok(format!(
+        "Imported {} skill{}",
+        imported.len(),
+        if imported.len() != 1 { "s" } else { "" }
+    ))
+}
+
+#[tauri::command]
+pub async fn open_skill_dir(state: State<'_, AppState>, name: String) -> Result<(), String> {
+    let skill_dir = state.dirs.registry().join(&name);
+    if !skill_dir.exists() {
+        return Err(format!("Skill directory not found: {}", name));
+    }
+    tracing::info!(skill = %name, "Opening skill directory");
+
+    #[cfg(target_os = "macos")]
+    std::process::Command::new("open")
+        .arg(&skill_dir)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+
+    #[cfg(target_os = "linux")]
+    std::process::Command::new("xdg-open")
+        .arg(&skill_dir)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+
+    #[cfg(target_os = "windows")]
+    std::process::Command::new("explorer")
+        .arg(&skill_dir)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
 }
 
 #[tauri::command]

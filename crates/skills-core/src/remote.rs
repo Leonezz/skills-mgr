@@ -253,6 +253,73 @@ pub async fn list_remote_skills(source: &GitHubSource) -> Result<Vec<RemoteSkill
     Ok(skills)
 }
 
+/// Download a GitHub repo to a staging directory and scan for skills.
+///
+/// Returns the list of discovered skills. The staging directory persists
+/// until `clean_staging` is called, enabling `import_from_browse` to
+/// import without re-downloading.
+pub async fn download_to_staging(
+    source: &GitHubSource,
+    staging_dir: &Path,
+) -> Result<Vec<RemoteSkillEntry>> {
+    // Clean any previous staging
+    if staging_dir.exists() {
+        std::fs::remove_dir_all(staging_dir)?;
+    }
+    std::fs::create_dir_all(staging_dir)?;
+
+    // Download and extract
+    let (tmp_dir, top_dir) = download_github_tarball(source).await?;
+
+    // Copy extracted content to staging/repo/
+    let repo_dir = staging_dir.join("repo");
+    crate::registry::copy_dir_recursive(&top_dir, &repo_dir)?;
+    drop(tmp_dir); // clean up temp
+
+    // Write source metadata
+    let meta = serde_json::json!({
+        "owner": source.owner,
+        "repo": source.repo,
+        "git_ref": source.git_ref,
+        "subpath": source.subpath,
+    });
+    std::fs::write(
+        staging_dir.join("meta.json"),
+        serde_json::to_string_pretty(&meta)?,
+    )?;
+
+    // Resolve base directory if subpath is given
+    let base_dir = match &source.subpath {
+        Some(subpath) => {
+            let target = repo_dir.join(subpath);
+            if !target.exists() {
+                bail!(
+                    "Subpath '{}' not found in {}/{}@{}",
+                    subpath,
+                    source.owner,
+                    source.repo,
+                    source.git_ref
+                );
+            }
+            target
+        }
+        None => repo_dir.clone(),
+    };
+
+    let mut skills = Vec::new();
+    scan_for_skills(&base_dir, &repo_dir, &mut skills)?;
+    skills.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(skills)
+}
+
+/// Scan a local directory for skills (used after download).
+pub fn scan_directory_for_skills(dir: &Path) -> Result<Vec<RemoteSkillEntry>> {
+    let mut skills = Vec::new();
+    scan_for_skills(dir, dir, &mut skills)?;
+    skills.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(skills)
+}
+
 /// Recursively scan directories for SKILL.md files, up to 3 levels deep.
 fn scan_for_skills(
     dir: &Path,

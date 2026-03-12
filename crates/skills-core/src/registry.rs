@@ -214,6 +214,57 @@ impl Registry {
         Ok(name)
     }
 
+    /// Import a skill from an already-extracted directory (e.g. staging).
+    ///
+    /// Copies the skill directory into the registry and records source metadata.
+    pub fn import_from_extracted_dir(
+        &self,
+        source_dir: &Path,
+        skill_name: &str,
+        owner: &str,
+        repo: &str,
+        git_ref: &str,
+        subpath: &str,
+    ) -> Result<()> {
+        let skill_md = source_dir.join("SKILL.md");
+        if !skill_md.exists() {
+            bail!("No SKILL.md found at {}", source_dir.display());
+        }
+
+        let dest = self.dirs.registry().join(skill_name);
+        if dest.exists() {
+            bail!("Skill '{}' already exists in registry", skill_name);
+        }
+
+        copy_dir_recursive(source_dir, &dest)?;
+
+        let hash = compute_tree_hash(&dest)?;
+        let canonical = format!(
+            "https://github.com/{}/{}/tree/{}/{}",
+            owner, repo, git_ref, subpath
+        );
+
+        let mut sources = SourcesConfig::load(&self.dirs.sources_toml()).unwrap_or_default();
+        sources.skills.insert(
+            skill_name.to_string(),
+            SkillSource {
+                source_type: SourceType::Git,
+                url: Some(canonical),
+                path: Some(subpath.to_string()),
+                git_ref: Some(git_ref.to_string()),
+                hash: Some(hash),
+                updated_at: Some(
+                    chrono::Utc::now()
+                        .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+                        .to_string(),
+                ),
+            },
+        );
+        sources.save(&self.dirs.sources_toml())?;
+
+        Ok(())
+    }
+
     /// List available skills in a remote GitHub repo or collection.
     ///
     /// Downloads the repo and scans for SKILL.md files in subdirectories.
