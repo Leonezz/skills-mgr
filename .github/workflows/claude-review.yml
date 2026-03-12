@@ -1,0 +1,34 @@
+name: Claude PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          use_sticky_comment: true
+          prompt: |
+            Review this pull request for a Rust + Tauri v2 + React/TypeScript desktop app.
+
+            Focus on:
+            - Correctness: logic bugs, off-by-one errors, missing error handling
+            - Security: injection, hardcoded secrets, unsafe patterns
+            - Rust idioms: proper error propagation, unnecessary clones, clippy-level issues
+            - TypeScript/React: type safety, missing null checks, stale closures
+            - Performance: unnecessary allocations, N+1 patterns, missing memoization
+
+            Skip cosmetic/style feedback — CI enforces cargo fmt and tsc already.
+            Only comment on issues that matter. If the PR looks good, say so briefly.
