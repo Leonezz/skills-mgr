@@ -5,6 +5,8 @@ export const SkillSchema = z.object({
   description: z.string().nullable(),
   files: z.array(z.string()),
   source_type: z.string().nullable(),
+  source_url: z.string().nullable(),
+  source_ref: z.string().nullable(),
   is_builtin: z.boolean(),
   dir_path: z.string(),
 })

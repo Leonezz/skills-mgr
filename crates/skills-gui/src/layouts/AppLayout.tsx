@@ -94,8 +94,8 @@ export function AppLayout() {
       </nav>
 
       {/* Main area */}
-      <main className="flex-1 overflow-auto p-8">
-        <div className="animate-page-in">
+      <main className="flex-1 flex flex-col overflow-hidden">
+        <div className="animate-page-in flex-1 flex flex-col min-h-0 p-8">
           <Outlet />
         </div>
       </main>

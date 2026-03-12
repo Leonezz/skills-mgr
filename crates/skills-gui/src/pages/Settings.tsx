@@ -6,8 +6,10 @@ import { Switch } from "@/components/ui/switch"
 import { useTheme } from "@/lib/theme"
 import { getSettings, saveSettings } from "@/lib/api"
 import type { SettingsPayload } from "@/lib/api"
+import { check } from "@tauri-apps/plugin-updater"
+import { relaunch } from "@tauri-apps/plugin-process"
 import { toast } from "sonner"
-import { Sun, Moon, Monitor } from "lucide-react"
+import { Sun, Moon, Monitor, Loader2, Download, CheckCircle } from "lucide-react"
 
 const themeOptions = [
   { value: "light" as const, icon: Sun, label: "Light" },
@@ -32,6 +34,65 @@ export function Settings() {
     })
   }, [])
 
+  // Updater state
+  const [updateStatus, setUpdateStatus] = useState<
+    "idle" | "checking" | "available" | "downloading" | "ready" | "up-to-date" | "error"
+  >("idle")
+  const [updateVersion, setUpdateVersion] = useState("")
+  const [updateError, setUpdateError] = useState("")
+  const [downloadProgress, setDownloadProgress] = useState(0)
+
+  async function checkForUpdates() {
+    setUpdateStatus("checking")
+    setUpdateError("")
+    try {
+      const update = await check()
+      if (update) {
+        setUpdateVersion(update.version)
+        setUpdateStatus("available")
+      } else {
+        setUpdateStatus("up-to-date")
+      }
+    } catch (e) {
+      setUpdateError(String(e))
+      setUpdateStatus("error")
+    }
+  }
+
+  async function downloadAndInstall() {
+    setUpdateStatus("downloading")
+    setDownloadProgress(0)
+    try {
+      const update = await check()
+      if (!update) {
+        setUpdateStatus("up-to-date")
+        return
+      }
+      let totalLength = 0
+      let downloaded = 0
+      await update.downloadAndInstall((event) => {
+        if (event.event === "Started") {
+          totalLength = event.data.contentLength ?? 0
+        } else if (event.event === "Progress") {
+          downloaded += event.data.chunkLength
+          if (totalLength > 0) {
+            setDownloadProgress(Math.round((downloaded / totalLength) * 100))
+          }
+        } else if (event.event === "Finished") {
+          setUpdateStatus("ready")
+        }
+      })
+      setUpdateStatus("ready")
+    } catch (e) {
+      setUpdateError(String(e))
+      setUpdateStatus("error")
+    }
+  }
+
+  async function handleRelaunch() {
+    await relaunch()
+  }
+
   function update(patch: Partial<SettingsPayload>) {
     if (!settings) return
     const updated = { ...settings, ...patch }
@@ -44,14 +105,17 @@ export function Settings() {
   }
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div>
+    <div className="flex flex-col flex-1 min-h-0">
+      {/* Header — fixed */}
+      <div className="shrink-0 pb-6">
         <h2 className="text-2xl font-bold tracking-tight">Settings</h2>
         <p className="text-sm text-muted-foreground">
           Configure skills-mgr preferences
         </p>
       </div>
+
+      {/* Body — scrollable */}
+      <div className="flex-1 min-h-0 overflow-y-auto space-y-6">
 
       {/* Appearance */}
       <section className="space-y-4 rounded-xl border border-border bg-card p-6">
@@ -171,14 +235,78 @@ export function Settings() {
         </div>
       </section>
 
-      {/* About */}
-      <section className="space-y-3 rounded-xl border border-border bg-card p-6">
+      {/* About & Updates */}
+      <section className="space-y-4 rounded-xl border border-border bg-card p-6">
         <h3 className="text-base font-semibold">About</h3>
-        <p className="text-sm text-muted-foreground">Skills Manager v0.1.0</p>
-        <p className="text-xs text-muted-foreground/70">
-          Cross-agent skill management using the Agent Skills open standard
-        </p>
+        <div className="flex items-center justify-between">
+          <div className="space-y-0.5">
+            <span className="text-sm font-medium">Skills Manager v0.1.0</span>
+            <p className="text-xs text-muted-foreground">
+              Cross-agent skill management using the Agent Skills open standard
+            </p>
+          </div>
+        </div>
+
+        <hr className="border-border" />
+
+        <div className="flex items-center justify-between gap-4">
+          <div className="space-y-0.5 flex-1 min-w-0">
+            <span className="text-sm font-medium">Updates</span>
+            <p className="text-xs text-muted-foreground">
+              {updateStatus === "idle" && "Check for new versions"}
+              {updateStatus === "checking" && "Checking for updates..."}
+              {updateStatus === "up-to-date" && "You're on the latest version"}
+              {updateStatus === "available" && `Version ${updateVersion} is available`}
+              {updateStatus === "downloading" && `Downloading update... ${downloadProgress}%`}
+              {updateStatus === "ready" && "Update downloaded — restart to apply"}
+              {updateStatus === "error" && (
+                <span className="text-destructive">{updateError}</span>
+              )}
+            </p>
+          </div>
+
+          {updateStatus === "idle" && (
+            <Button variant="outline" size="sm" onClick={checkForUpdates}>
+              Check for Updates
+            </Button>
+          )}
+          {updateStatus === "checking" && (
+            <Button variant="outline" size="sm" disabled>
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Checking...
+            </Button>
+          )}
+          {updateStatus === "up-to-date" && (
+            <Button variant="outline" size="sm" onClick={checkForUpdates}>
+              <CheckCircle className="h-4 w-4 text-emerald-500" />
+              Up to Date
+            </Button>
+          )}
+          {updateStatus === "available" && (
+            <Button size="sm" onClick={downloadAndInstall}>
+              <Download className="h-4 w-4" />
+              Download & Install
+            </Button>
+          )}
+          {updateStatus === "downloading" && (
+            <Button size="sm" disabled>
+              <Loader2 className="h-4 w-4 animate-spin" />
+              {downloadProgress}%
+            </Button>
+          )}
+          {updateStatus === "ready" && (
+            <Button size="sm" onClick={handleRelaunch}>
+              Restart Now
+            </Button>
+          )}
+          {updateStatus === "error" && (
+            <Button variant="outline" size="sm" onClick={checkForUpdates}>
+              Retry
+            </Button>
+          )}
+        </div>
       </section>
+      </div>
     </div>
   )
 }

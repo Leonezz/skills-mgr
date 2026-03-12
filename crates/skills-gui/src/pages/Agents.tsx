@@ -140,9 +140,9 @@ export function Agents() {
   }
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
+    <div className="flex flex-col flex-1 min-h-0">
+      {/* Header — fixed */}
+      <div className="shrink-0 flex items-center justify-between pb-6">
         <div>
           <h2 className="text-2xl font-bold tracking-tight">Agent Tools</h2>
           <p className="text-sm text-muted-foreground">
@@ -300,11 +300,12 @@ export function Agents() {
         </DialogContent>
       </Dialog>
 
-      {/* Agent List — stacked rows */}
+      {/* Agent List — scrollable */}
+      <div className="flex-1 min-h-0 overflow-y-auto">
       {isLoading ? (
         <p className="text-muted-foreground">Loading...</p>
       ) : agents && agents.length > 0 ? (
-        <div className="space-y-3">
+        <div className="space-y-3 pb-4">
           {agents.map((agent: Agent, index: number) => {
             const color = getAgentColor(index)
             return (
@@ -355,6 +356,7 @@ export function Agents() {
       ) : (
         <p className="text-muted-foreground">No agents configured.</p>
       )}
+      </div>
     </div>
   )
 }

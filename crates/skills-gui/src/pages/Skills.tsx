@@ -34,6 +34,7 @@ import {
   Loader2,
   Check,
   ExternalLink,
+  AlertTriangle,
 } from "lucide-react"
 import type { Skill } from "@/lib/schemas"
 
@@ -62,6 +63,14 @@ export function Skills() {
   const [browseLoading, setBrowseLoading] = useState(false)
   const [browseError, setBrowseError] = useState("")
 
+  // Conflict resolution state
+  const [conflictAction, setConflictAction] = useState<"overwrite" | "skip">("overwrite")
+
+  const existingNames = useMemo(
+    () => new Set(skills?.map((s) => s.name) ?? []),
+    [skills],
+  )
+
   const filteredSkills = useMemo(() => {
     if (!skills) return []
     const q = search.trim().toLowerCase()
@@ -78,6 +87,11 @@ export function Skills() {
     return s.startsWith("http://") || s.startsWith("https://") || /^[a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+/.test(s)
   }
 
+  const conflictingRemote = useMemo(
+    () => remoteSkills.filter((s) => existingNames.has(s.name)),
+    [remoteSkills, existingNames],
+  )
+
   const createMutation = useMutation({
     mutationFn: async () => {
       // Auto-detect: if user typed a URL/shorthand in create mode, redirect to remote import
@@ -87,7 +101,17 @@ export function Skills() {
       if (addMode === "remote") {
         // If we have browsed skills selected, import from cached staging
         if (remoteSkills.length > 0 && selectedRemote.size > 0) {
-          const selected = [...selectedRemote]
+          let selected = [...selectedRemote]
+          // Apply conflict resolution — skip conflicting ones if action is "skip"
+          if (conflictAction === "skip") {
+            selected = selected.filter((subpath) => {
+              const entry = remoteSkills.find((s) => s.subpath === subpath)
+              return !entry || !existingNames.has(entry.name)
+            })
+          }
+          if (selected.length === 0) {
+            return "No new skills to import (all skipped due to conflicts)"
+          }
           return importFromBrowse(selected)
         }
         return importRemoteSkill(remoteUrl)
@@ -151,6 +175,7 @@ export function Skills() {
     setSelectedRemote(new Set())
     setBrowseLoading(false)
     setBrowseError("")
+    setConflictAction("overwrite")
   }
 
   async function handleBrowseRemote() {
@@ -164,11 +189,18 @@ export function Skills() {
       if (skills.length === 0) {
         setBrowseError("No skills found in this repository.")
       } else if (skills.length === 1) {
-        // Single skill — import directly from staging
-        const msg = await importFromBrowse([skills[0].subpath])
-        toast.success(msg)
-        queryClient.invalidateQueries({ queryKey: ["skills"] })
-        closeAdd()
+        // Single skill — check conflict
+        if (existingNames.has(skills[0].name)) {
+          // Show as selectable so user can decide
+          setRemoteSkills(skills)
+          setSelectedRemote(new Set(skills.map((s) => s.subpath)))
+        } else {
+          // No conflict — import directly from staging
+          const msg = await importFromBrowse([skills[0].subpath])
+          toast.success(msg)
+          queryClient.invalidateQueries({ queryKey: ["skills"] })
+          closeAdd()
+        }
       } else {
         setRemoteSkills(skills)
         setSelectedRemote(new Set(skills.map((s) => s.subpath)))
@@ -198,37 +230,53 @@ export function Skills() {
     return [...exts].sort()
   }
 
-  return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-bold tracking-tight">Skills Registry</h2>
-          <p className="text-sm text-muted-foreground">
-            Manage your skill collection
-          </p>
-        </div>
-        <Button onClick={() => setShowAdd(true)}>
-          <Plus className="h-4 w-4" />
-          Add Skill
-        </Button>
-      </div>
+  function formatSourceDisplay(skill: Skill): string {
+    if (!skill.source_type) return "Local file"
+    const parts: string[] = [skill.source_type]
+    if (skill.source_url) {
+      // Shorten GitHub URLs: https://github.com/owner/repo → owner/repo
+      const gh = skill.source_url.replace(/^https?:\/\/github\.com\//, "")
+      parts.push(gh)
+    }
+    if (skill.source_ref && skill.source_ref !== "main" && skill.source_ref !== "master") {
+      parts.push(`@${skill.source_ref}`)
+    }
+    return parts.join(" \u00b7 ")
+  }
 
-      {/* Search */}
-      <div className="flex items-center gap-3">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search skills by name, tag, or source..."
-            className="pl-9"
-          />
+  return (
+    <div className="flex flex-col flex-1 min-h-0">
+      {/* Header — fixed */}
+      <div className="shrink-0 space-y-6 pb-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-2xl font-bold tracking-tight">Skills Registry</h2>
+            <p className="text-sm text-muted-foreground">
+              Manage your skill collection
+            </p>
+          </div>
+          <Button onClick={() => setShowAdd(true)}>
+            <Plus className="h-4 w-4" />
+            Add Skill
+          </Button>
         </div>
-        <Button variant="outline" size="sm">
-          <Filter className="h-4 w-4" />
-          Filter
-        </Button>
+
+        {/* Search */}
+        <div className="flex items-center gap-3">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search skills by name, tag, or source..."
+              className="pl-9"
+            />
+          </div>
+          <Button variant="outline" size="sm">
+            <Filter className="h-4 w-4" />
+            Filter
+          </Button>
+        </div>
       </div>
 
       {/* Add Skill Dialog */}
@@ -374,6 +422,7 @@ export function Skills() {
                     <div className="grid grid-cols-2 gap-2 max-h-56 overflow-y-auto">
                       {remoteSkills.map((entry) => {
                         const isSelected = selectedRemote.has(entry.subpath)
+                        const hasConflict = existingNames.has(entry.name)
                         return (
                           <button
                             key={entry.subpath}
@@ -388,7 +437,9 @@ export function Skills() {
                             }}
                             className={`flex items-start gap-2.5 rounded-lg border p-3 text-left transition-colors ${
                               isSelected
-                                ? "border-primary bg-primary/5"
+                                ? hasConflict
+                                  ? "border-amber-500 bg-amber-500/5"
+                                  : "border-primary bg-primary/5"
                                 : "border-border hover:border-muted-foreground/30"
                             }`}
                           >
@@ -402,7 +453,17 @@ export function Skills() {
                               {isSelected && <Check className="h-3 w-3" />}
                             </div>
                             <div className="min-w-0 flex-1">
-                              <p className="text-sm font-medium truncate">{entry.name}</p>
+                              <div className="flex items-center gap-1.5">
+                                <p className="text-sm font-medium truncate">{entry.name}</p>
+                                {hasConflict && (
+                                  <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+                                )}
+                              </div>
+                              {hasConflict && (
+                                <p className="text-[10px] font-medium text-amber-500 mt-0.5">
+                                  Already exists
+                                </p>
+                              )}
                               {entry.description && (
                                 <p className="text-xs text-muted-foreground line-clamp-2 mt-0.5">
                                   {entry.description}
@@ -413,6 +474,40 @@ export function Skills() {
                         )
                       })}
                     </div>
+
+                    {/* Conflict resolution options */}
+                    {conflictingRemote.length > 0 && (
+                      <div className="flex items-center gap-3 rounded-md border border-amber-500/30 bg-amber-500/5 p-2.5">
+                        <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
+                        <span className="text-xs text-amber-700 dark:text-amber-400">
+                          {conflictingRemote.length} skill{conflictingRemote.length > 1 ? "s" : ""} already exist{conflictingRemote.length === 1 ? "s" : ""}
+                        </span>
+                        <div className="ml-auto flex gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setConflictAction("overwrite")}
+                            className={`rounded px-2 py-1 text-[11px] font-medium transition-colors ${
+                              conflictAction === "overwrite"
+                                ? "bg-amber-500 text-white"
+                                : "bg-muted text-muted-foreground hover:text-foreground"
+                            }`}
+                          >
+                            Overwrite
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConflictAction("skip")}
+                            className={`rounded px-2 py-1 text-[11px] font-medium transition-colors ${
+                              conflictAction === "skip"
+                                ? "bg-amber-500 text-white"
+                                : "bg-muted text-muted-foreground hover:text-foreground"
+                            }`}
+                          >
+                            Skip
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -557,10 +652,20 @@ export function Skills() {
               <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                 Details
               </p>
-              <div className="flex justify-between text-sm">
+              <div className="space-y-1 text-sm">
                 <span className="text-muted-foreground">Source</span>
-                <span>{detail?.source_type ?? "Local file"}</span>
+                <p className="break-all">
+                  {detail ? formatSourceDisplay(detail) : "Local file"}
+                </p>
               </div>
+              {detail?.source_url && (
+                <div className="space-y-1 text-sm">
+                  <span className="text-muted-foreground">URL</span>
+                  <p className="break-all text-xs font-mono text-muted-foreground">
+                    {detail.source_url}
+                  </p>
+                </div>
+              )}
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">Files</span>
                 <span>{detail?.files.length ?? 0} files</span>
@@ -613,85 +718,87 @@ export function Skills() {
         </SheetContent>
       </Sheet>
 
-      {/* Skill Cards Grid */}
-      {isLoading ? (
-        <p className="text-muted-foreground">Loading...</p>
-      ) : filteredSkills.length > 0 ? (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {filteredSkills.map((skill: Skill, index: number) => (
-            <Card
-              key={skill.name}
-              className="animate-list-item group cursor-pointer transition-colors hover:border-primary/30"
-              style={{ animationDelay: `${index * 40}ms` }}
-              onClick={() => setDetail(skill)}
-            >
-              <CardContent className="p-5">
-                <div className="flex items-start gap-3.5">
-                  {/* Icon */}
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10">
-                    <FileCode className="h-[18px] w-[18px] text-primary" />
-                  </div>
-
-                  {/* Content */}
-                  <div className="flex-1 min-w-0 space-y-2">
-                    {/* Name + overflow */}
-                    <div className="flex items-center justify-between">
-                      <span className="text-[15px] font-semibold truncate">
-                        {skill.name}
-                      </span>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          setDetail(skill)
-                        }}
-                        className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100"
-                      >
-                        <MoreVertical className="h-4 w-4" />
-                      </button>
+      {/* Skill Cards Grid — scrollable */}
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        {isLoading ? (
+          <p className="text-muted-foreground">Loading...</p>
+        ) : filteredSkills.length > 0 ? (
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 pb-4">
+            {filteredSkills.map((skill: Skill, index: number) => (
+              <Card
+                key={skill.name}
+                className="animate-list-item group cursor-pointer transition-colors hover:border-primary/30"
+                style={{ animationDelay: `${index * 40}ms` }}
+                onClick={() => setDetail(skill)}
+              >
+                <CardContent className="p-5">
+                  <div className="flex items-start gap-3.5">
+                    {/* Icon */}
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+                      <FileCode className="h-[18px] w-[18px] text-primary" />
                     </div>
 
-                    {/* Description */}
-                    <p className="line-clamp-2 text-[13px] leading-relaxed text-muted-foreground">
-                      {skill.description ?? "No description"}
-                    </p>
-
-                    {/* Tags + file info row */}
-                    <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
-                      {skill.is_builtin && (
-                        <Badge variant="secondary" className="text-[10px]">
-                          Built-in
-                        </Badge>
-                      )}
-                      {skill.source_type && (
-                        <Badge variant="accent" className="text-[10px]">
-                          {skill.source_type}
-                        </Badge>
-                      )}
-                      <span className="text-[11px] text-muted-foreground">
-                        {skill.files.length} file{skill.files.length !== 1 ? "s" : ""}
-                      </span>
-                      {fileExtensions(skill.files).map((ext) => (
-                        <span
-                          key={ext}
-                          className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
-                        >
-                          {ext}
+                    {/* Content */}
+                    <div className="flex-1 min-w-0 space-y-2">
+                      {/* Name + overflow */}
+                      <div className="flex items-center justify-between">
+                        <span className="text-[15px] font-semibold truncate">
+                          {skill.name}
                         </span>
-                      ))}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setDetail(skill)
+                          }}
+                          className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100"
+                        >
+                          <MoreVertical className="h-4 w-4" />
+                        </button>
+                      </div>
+
+                      {/* Description */}
+                      <p className="line-clamp-2 text-[13px] leading-relaxed text-muted-foreground">
+                        {skill.description ?? "No description"}
+                      </p>
+
+                      {/* Tags + file info row */}
+                      <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                        {skill.is_builtin && (
+                          <Badge variant="secondary" className="text-[10px]">
+                            Built-in
+                          </Badge>
+                        )}
+                        {skill.source_type && (
+                          <Badge variant="accent" className="text-[10px]">
+                            {skill.source_type}
+                          </Badge>
+                        )}
+                        <span className="text-[11px] text-muted-foreground">
+                          {skill.files.length} file{skill.files.length !== 1 ? "s" : ""}
+                        </span>
+                        {fileExtensions(skill.files).map((ext) => (
+                          <span
+                            key={ext}
+                            className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+                          >
+                            {ext}
+                          </span>
+                        ))}
+                      </div>
                     </div>
                   </div>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      ) : skills && skills.length > 0 ? (
-        <p className="text-muted-foreground">
-          No skills matching &ldquo;{search}&rdquo;
-        </p>
-      ) : (
-        <p className="text-muted-foreground">No skills in registry.</p>
-      )}
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        ) : skills && skills.length > 0 ? (
+          <p className="text-muted-foreground">
+            No skills matching &ldquo;{search}&rdquo;
+          </p>
+        ) : (
+          <p className="text-muted-foreground">No skills in registry.</p>
+        )}
+      </div>
     </div>
   )
 }

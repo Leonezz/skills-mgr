@@ -51,8 +51,8 @@ export function ActivityLog() {
   )
 
   return (
-    <div className="flex flex-col" style={{ height: "calc(100vh - 4rem)" }}>
-      {/* Header */}
+    <div className="flex flex-col flex-1 min-h-0">
+      {/* Header — fixed */}
       <div className="shrink-0">
         <h2 className="text-2xl font-bold tracking-tight">Activity Log</h2>
         <p className="text-sm text-muted-foreground">
@@ -92,7 +92,7 @@ export function ActivityLog() {
         <div className="flex-1 min-h-0 flex flex-col overflow-hidden rounded-xl border border-border bg-card">
           {/* Scrollable area with sticky header */}
           <div className="flex-1 overflow-y-auto">
-            <Table>
+            <Table className="table-fixed">
               <TableHeader className="sticky top-0 z-10 bg-muted/80 backdrop-blur-sm">
                 <TableRow className="hover:bg-transparent">
                   <TableHead className="w-40">Timestamp</TableHead>
@@ -111,13 +111,13 @@ export function ActivityLog() {
                     <TableCell className="w-20">
                       <SourceBadge source={log.source} />
                     </TableCell>
-                    <TableCell className="w-28 truncate text-foreground">
-                      {log.agent_name ?? "\u2014"}
+                    <TableCell className="w-28 text-foreground">
+                      <span className="truncate block">{log.agent_name ?? "\u2014"}</span>
                     </TableCell>
-                    <TableCell className="truncate text-foreground">
-                      {log.operation}
+                    <TableCell className="text-foreground break-words whitespace-normal">
+                      <span className="font-medium">{log.operation}</span>
                       {log.details && (
-                        <span className="ml-1 text-muted-foreground">{log.details}</span>
+                        <span className="ml-1 text-muted-foreground break-all">{log.details}</span>
                       )}
                     </TableCell>
                     <TableCell

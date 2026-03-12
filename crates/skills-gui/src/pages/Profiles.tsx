@@ -131,9 +131,9 @@ export function Profiles() {
   }
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
+    <div className="flex flex-col flex-1 min-h-0">
+      {/* Header — fixed */}
+      <div className="shrink-0 flex items-center justify-between pb-6">
         <div>
           <h2 className="text-2xl font-bold tracking-tight">Profiles</h2>
           <p className="text-sm text-muted-foreground">
@@ -303,11 +303,12 @@ export function Profiles() {
         </DialogContent>
       </Dialog>
 
-      {/* Profile List */}
+      {/* Profile List — scrollable */}
+      <div className="flex-1 min-h-0 overflow-y-auto">
       {isLoading ? (
         <p className="text-muted-foreground">Loading...</p>
       ) : profiles.length > 0 ? (
-        <div className="space-y-3">
+        <div className="space-y-3 pb-4">
           {profiles.map((profile: Profile) => {
             const isBase = profile.name === "base" || profile.name === "base-layer"
             return (
@@ -388,6 +389,7 @@ export function Profiles() {
       ) : (
         <p className="text-muted-foreground">No profiles defined.</p>
       )}
+      </div>
     </div>
   )
 }

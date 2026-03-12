@@ -45,9 +45,9 @@ export function Dashboard() {
   const projectCount = projects.data?.length ?? 0
 
   return (
-    <div className="space-y-7">
-      {/* Header */}
-      <div className="flex items-center justify-between">
+    <div className="flex flex-col flex-1 min-h-0">
+      {/* Header — fixed */}
+      <div className="shrink-0 flex items-center justify-between pb-7">
         <div>
           <h2 className="text-2xl font-bold tracking-tight">Dashboard</h2>
           <p className="text-sm text-muted-foreground">
@@ -69,6 +69,9 @@ export function Dashboard() {
           </Button>
         </div>
       </div>
+
+      {/* Body — scrollable */}
+      <div className="flex-1 min-h-0 overflow-y-auto space-y-7">
 
       {/* Stat Cards */}
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
@@ -180,6 +183,7 @@ export function Dashboard() {
           )}
         </CardContent>
       </Card>
+      </div>
     </div>
   )
 }

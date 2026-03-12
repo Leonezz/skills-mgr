@@ -17,6 +17,8 @@ pub struct SkillInfo {
     pub description: Option<String>,
     pub files: Vec<String>,
     pub source_type: Option<String>,
+    pub source_url: Option<String>,
+    pub source_ref: Option<String>,
     pub is_builtin: bool,
     pub dir_path: String,
 }
@@ -64,13 +66,19 @@ pub async fn list_skills(state: State<'_, AppState>) -> Result<Vec<SkillInfo>, S
         .map(|s| {
             let is_builtin = BUILTIN_SKILLS.contains(&s.name.as_str());
             let dir_path = s.dir_path.to_string_lossy().to_string();
+            let source_type = s
+                .source
+                .as_ref()
+                .map(|src| format!("{:?}", src.source_type).to_lowercase());
+            let source_url = s.source.as_ref().and_then(|src| src.url.clone());
+            let source_ref = s.source.as_ref().and_then(|src| src.git_ref.clone());
             SkillInfo {
                 name: s.name,
                 description: s.description,
                 files: s.files,
-                source_type: s
-                    .source
-                    .map(|src| format!("{:?}", src.source_type).to_lowercase()),
+                source_type,
+                source_url,
+                source_ref,
                 is_builtin,
                 dir_path,
             }
