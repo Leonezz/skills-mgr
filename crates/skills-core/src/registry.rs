@@ -214,6 +214,22 @@ impl Registry {
         Ok(name)
     }
 
+    /// List available skills in a remote GitHub repo or collection.
+    ///
+    /// Downloads the repo and scans for SKILL.md files in subdirectories.
+    pub async fn list_remote_skills(
+        &self,
+        url_or_shorthand: &str,
+    ) -> Result<Vec<remote::RemoteSkillEntry>> {
+        let source = remote::parse_github_url(url_or_shorthand)?;
+        tracing::info!(
+            owner = %source.owner,
+            repo = %source.repo,
+            "Listing remote skills"
+        );
+        remote::list_remote_skills(&source).await
+    }
+
     /// Add a skill from a remote GitHub URL or shorthand.
     ///
     /// Parses the URL, downloads the tarball, extracts the skill directory,

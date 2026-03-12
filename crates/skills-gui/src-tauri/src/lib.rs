@@ -51,6 +51,7 @@ pub fn run() {
             commands::create_skill,
             commands::import_skill,
             commands::import_remote_skill,
+            commands::list_remote_skills,
             commands::remove_skill,
             commands::read_skill_content,
             commands::update_skill,

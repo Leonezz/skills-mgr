@@ -198,6 +198,30 @@ pub async fn import_remote_skill(
 }
 
 #[tauri::command]
+pub async fn list_remote_skills(
+    state: State<'_, AppState>,
+    url: String,
+) -> Result<Vec<serde_json::Value>, String> {
+    tracing::info!(url = %url, "Listing remote skills");
+    let registry = Registry::new(state.dirs.clone());
+    let skills = registry
+        .list_remote_skills(&url)
+        .await
+        .map_err(|e| e.to_string())?;
+    tracing::info!(count = skills.len(), "Found remote skills");
+    Ok(skills
+        .into_iter()
+        .map(|s| {
+            serde_json::json!({
+                "name": s.name,
+                "description": s.description,
+                "subpath": s.subpath,
+            })
+        })
+        .collect())
+}
+
+#[tauri::command]
 pub async fn read_skill_content(
     state: State<'_, AppState>,
     name: String,

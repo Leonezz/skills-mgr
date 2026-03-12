@@ -27,6 +27,17 @@ export async function importRemoteSkill(url: string) {
   return await invoke("import_remote_skill", { url }) as string
 }
 
+export interface RemoteSkillEntry {
+  name: string
+  description: string | null
+  subpath: string
+}
+
+export async function listRemoteSkills(url: string) {
+  const data = await invoke("list_remote_skills", { url })
+  return data as RemoteSkillEntry[]
+}
+
 export async function removeSkill(name: string) {
   return await invoke("remove_skill", { name }) as string
 }

@@ -99,13 +99,21 @@ pub fn is_remote_source(input: &str) -> bool {
     }
 }
 
-/// Download a skill from a GitHub repository to a temporary directory.
+/// Metadata for a skill discovered in a remote repo.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RemoteSkillEntry {
+    /// Skill name (directory name)
+    pub name: String,
+    /// Description from SKILL.md frontmatter, if parseable
+    pub description: Option<String>,
+    /// Subpath within the repo (e.g. "skills/pdf")
+    pub subpath: String,
+}
+
+/// Download a GitHub repo tarball and extract to a temp directory.
 ///
-/// Returns the path to the extracted skill directory inside the temp dir.
-/// The caller is responsible for using the contents and cleaning up.
-pub async fn download_github_skill(
-    source: &GitHubSource,
-) -> Result<(tempfile::TempDir, PathBuf)> {
+/// Returns (TempDir, top_dir_path). The caller owns the TempDir lifetime.
+async fn download_github_tarball(source: &GitHubSource) -> Result<(tempfile::TempDir, PathBuf)> {
     let tarball_url = format!(
         "https://api.github.com/repos/{}/{}/tarball/{}",
         source.owner, source.repo, source.git_ref
@@ -162,7 +170,6 @@ pub async fn download_github_skill(
         .await
         .context("Failed to read response body")?;
 
-    // Extract tarball
     let tmp_dir = tempfile::TempDir::new().context("Failed to create temp directory")?;
     let decoder = GzDecoder::new(&bytes[..]);
     let mut archive = Archive::new(decoder);
@@ -171,9 +178,20 @@ pub async fn download_github_skill(
         .unpack(tmp_dir.path())
         .context("Failed to extract tarball")?;
 
-    // GitHub tarballs have a single top-level directory: owner-repo-sha/
     let top_dir = find_single_child_dir(tmp_dir.path())
         .context("Tarball doesn't contain a single top-level directory")?;
+
+    Ok((tmp_dir, top_dir))
+}
+
+/// Download a skill from a GitHub repository to a temporary directory.
+///
+/// Returns the path to the extracted skill directory inside the temp dir.
+/// The caller is responsible for using the contents and cleaning up.
+pub async fn download_github_skill(
+    source: &GitHubSource,
+) -> Result<(tempfile::TempDir, PathBuf)> {
+    let (tmp_dir, top_dir) = download_github_tarball(source).await?;
 
     // Resolve the target path (subpath within the repo)
     let skill_dir = match &source.subpath {
@@ -202,6 +220,112 @@ pub async fn download_github_skill(
     }
 
     Ok((tmp_dir, skill_dir))
+}
+
+/// List all skills available in a remote GitHub repository.
+///
+/// Downloads the repo tarball and scans for directories containing SKILL.md.
+/// Returns a list of discovered skills with their subpaths.
+pub async fn list_remote_skills(source: &GitHubSource) -> Result<Vec<RemoteSkillEntry>> {
+    let (_tmp_dir, top_dir) = download_github_tarball(source).await?;
+
+    // Resolve base directory if subpath is given
+    let base_dir = match &source.subpath {
+        Some(subpath) => {
+            let target = top_dir.join(subpath);
+            if !target.exists() {
+                bail!(
+                    "Subpath '{}' not found in {}/{}@{}",
+                    subpath,
+                    source.owner,
+                    source.repo,
+                    source.git_ref
+                );
+            }
+            target
+        }
+        None => top_dir.clone(),
+    };
+
+    let mut skills = Vec::new();
+    scan_for_skills(&base_dir, &top_dir, &mut skills)?;
+    skills.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(skills)
+}
+
+/// Recursively scan directories for SKILL.md files, up to 3 levels deep.
+fn scan_for_skills(
+    dir: &Path,
+    repo_root: &Path,
+    skills: &mut Vec<RemoteSkillEntry>,
+) -> Result<()> {
+    scan_for_skills_inner(dir, repo_root, skills, 0)
+}
+
+fn scan_for_skills_inner(
+    dir: &Path,
+    repo_root: &Path,
+    skills: &mut Vec<RemoteSkillEntry>,
+    depth: u32,
+) -> Result<()> {
+    if depth > 3 || !dir.is_dir() {
+        return Ok(());
+    }
+
+    let skill_md = dir.join("SKILL.md");
+    if skill_md.exists() {
+        let name = dir
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let subpath = dir
+            .strip_prefix(repo_root)
+            .unwrap_or(dir)
+            .to_string_lossy()
+            .to_string();
+        let description = parse_skill_description(&skill_md);
+
+        skills.push(RemoteSkillEntry {
+            name,
+            description,
+            subpath,
+        });
+        // Don't recurse into skill directories — a SKILL.md marks a leaf
+        return Ok(());
+    }
+
+    // Recurse into subdirectories
+    let entries = std::fs::read_dir(dir);
+    if let Ok(entries) = entries {
+        for entry in entries.flatten() {
+            if entry.path().is_dir() {
+                scan_for_skills_inner(&entry.path(), repo_root, skills, depth + 1)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Parse description from a SKILL.md file's YAML frontmatter.
+fn parse_skill_description(skill_md: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(skill_md).ok()?;
+    let content = content.trim();
+    if !content.starts_with("---") {
+        return None;
+    }
+    let end = content[3..].find("---")?;
+    let frontmatter = &content[3..3 + end];
+    for line in frontmatter.lines() {
+        let line = line.trim();
+        if let Some(desc) = line.strip_prefix("description:") {
+            let desc = desc.trim().trim_matches('"').trim_matches('\'');
+            if !desc.is_empty() {
+                return Some(desc.to_string());
+            }
+        }
+    }
+    None
 }
 
 /// Find the single child directory inside a directory (GitHub tarball structure).
@@ -346,5 +470,86 @@ mod tests {
         assert!(is_remote_source("user/repo/path/to/skill"));
         assert!(!is_remote_source("/local/path"));
         assert!(!is_remote_source("./relative/path"));
+    }
+
+    #[test]
+    fn test_scan_for_skills_multi_skill_repo() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+
+        // Simulate a multi-skill repo like anthropics/skills
+        // root/skills/pdf/SKILL.md
+        // root/skills/docx/SKILL.md
+        // root/README.md (no SKILL.md at root)
+        std::fs::create_dir_all(root.join("skills/pdf")).unwrap();
+        std::fs::write(
+            root.join("skills/pdf/SKILL.md"),
+            "---\nname: pdf\ndescription: PDF processing\n---\n",
+        )
+        .unwrap();
+
+        std::fs::create_dir_all(root.join("skills/docx")).unwrap();
+        std::fs::write(
+            root.join("skills/docx/SKILL.md"),
+            "---\nname: docx\ndescription: Word document handling\n---\n",
+        )
+        .unwrap();
+
+        std::fs::write(root.join("README.md"), "# Skills collection").unwrap();
+
+        let mut skills = Vec::new();
+        scan_for_skills(root, root, &mut skills).unwrap();
+        skills.sort_by(|a, b| a.name.cmp(&b.name));
+
+        assert_eq!(skills.len(), 2);
+        assert_eq!(skills[0].name, "docx");
+        assert_eq!(skills[0].description.as_deref(), Some("Word document handling"));
+        assert_eq!(skills[0].subpath, "skills/docx");
+        assert_eq!(skills[1].name, "pdf");
+        assert_eq!(skills[1].description.as_deref(), Some("PDF processing"));
+        assert_eq!(skills[1].subpath, "skills/pdf");
+    }
+
+    #[test]
+    fn test_scan_for_skills_single_skill_at_root() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+
+        // Single skill repo: SKILL.md at root
+        std::fs::write(
+            root.join("SKILL.md"),
+            "---\nname: my-skill\ndescription: A single skill\n---\n",
+        )
+        .unwrap();
+
+        let mut skills = Vec::new();
+        scan_for_skills(root, root, &mut skills).unwrap();
+
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].description.as_deref(), Some("A single skill"));
+    }
+
+    #[test]
+    fn test_scan_for_skills_empty_repo() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut skills = Vec::new();
+        scan_for_skills(tmp.path(), tmp.path(), &mut skills).unwrap();
+        assert!(skills.is_empty());
+    }
+
+    #[test]
+    fn test_parse_skill_description_valid() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("SKILL.md");
+        std::fs::write(&path, "---\nname: test\ndescription: Hello world\n---\nBody").unwrap();
+        assert_eq!(parse_skill_description(&path), Some("Hello world".to_string()));
+    }
+
+    #[test]
+    fn test_parse_skill_description_no_frontmatter() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("SKILL.md");
+        std::fs::write(&path, "# Just markdown").unwrap();
+        assert_eq!(parse_skill_description(&path), None);
     }
 }

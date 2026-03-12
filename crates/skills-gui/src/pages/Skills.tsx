@@ -19,7 +19,8 @@ import {
   SheetBody,
   SheetFooter,
 } from "@/components/ui/sheet"
-import { listSkills, createSkill, removeSkill, importSkill, importRemoteSkill, updateSkill } from "@/lib/api"
+import { listSkills, createSkill, removeSkill, importSkill, importRemoteSkill, listRemoteSkills, updateSkill } from "@/lib/api"
+import type { RemoteSkillEntry } from "@/lib/api"
 import { open } from "@tauri-apps/plugin-dialog"
 import { toast } from "sonner"
 import {
@@ -30,6 +31,8 @@ import {
   FileCode,
   FolderOpen,
   Globe,
+  Loader2,
+  Check,
 } from "lucide-react"
 import type { Skill } from "@/lib/schemas"
 
@@ -53,6 +56,10 @@ export function Skills() {
   const [newDesc, setNewDesc] = useState("")
   const [newSourcePath, setNewSourcePath] = useState("")
   const [remoteUrl, setRemoteUrl] = useState("")
+  const [remoteSkills, setRemoteSkills] = useState<RemoteSkillEntry[]>([])
+  const [selectedRemote, setSelectedRemote] = useState<Set<string>>(new Set())
+  const [browseLoading, setBrowseLoading] = useState(false)
+  const [browseError, setBrowseError] = useState("")
 
   const filteredSkills = useMemo(() => {
     if (!skills) return []
@@ -71,12 +78,33 @@ export function Skills() {
   }
 
   const createMutation = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       // Auto-detect: if user typed a URL/shorthand in create mode, redirect to remote import
       if (addMode === "create" && isUrlLike(newName)) {
         return importRemoteSkill(newName)
       }
       if (addMode === "remote") {
+        // Batch import selected skills from a browsed collection
+        if (remoteSkills.length > 0 && selectedRemote.size > 0) {
+          const results: string[] = []
+          const errors: string[] = []
+          for (const entry of remoteSkills) {
+            if (!selectedRemote.has(entry.subpath)) continue
+            const source = remoteUrl.startsWith("http")
+              ? remoteUrl.replace(/\/tree\/[^/]+.*$/, "") + "/tree/main/" + entry.subpath
+              : remoteUrl.split("/").slice(0, 2).join("/") + "/" + entry.subpath
+            try {
+              const msg = await importRemoteSkill(source)
+              results.push(msg)
+            } catch (e) {
+              errors.push(`${entry.name}: ${e}`)
+            }
+          }
+          if (errors.length > 0) {
+            throw new Error(`Imported ${results.length}, failed ${errors.length}: ${errors[0]}`)
+          }
+          return `Imported ${results.length} skill${results.length !== 1 ? "s" : ""}`
+        }
         return importRemoteSkill(remoteUrl)
       }
       if (addMode === "local") {
@@ -135,7 +163,34 @@ export function Skills() {
     setNewDesc("")
     setNewSourcePath("")
     setRemoteUrl("")
+    setRemoteSkills([])
+    setSelectedRemote(new Set())
+    setBrowseLoading(false)
+    setBrowseError("")
   }
+
+  async function handleBrowseRemote() {
+    if (!remoteUrl.trim()) return
+    setBrowseLoading(true)
+    setBrowseError("")
+    setRemoteSkills([])
+    setSelectedRemote(new Set())
+    try {
+      const skills = await listRemoteSkills(remoteUrl.trim())
+      if (skills.length === 0) {
+        setBrowseError("No skills found in this repository.")
+      } else {
+        setRemoteSkills(skills)
+        // Auto-select all by default
+        setSelectedRemote(new Set(skills.map((s) => s.subpath)))
+      }
+    } catch (e) {
+      setBrowseError(String(e))
+    } finally {
+      setBrowseLoading(false)
+    }
+  }
+
 
   async function handleBrowseSource() {
     const selected = await open({
@@ -266,21 +321,111 @@ export function Skills() {
 
             {/* Remote import mode */}
             {addMode === "remote" && (
-              <div className="space-y-2">
-                <Label>GitHub URL or Shorthand</Label>
-                <Input
-                  value={remoteUrl}
-                  onChange={(e) => setRemoteUrl(e.target.value)}
-                  placeholder="owner/repo/path/to/skill"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Supported formats:
-                </p>
-                <ul className="space-y-0.5 text-xs text-muted-foreground list-disc pl-4">
-                  <li>https://github.com/owner/repo/tree/main/path</li>
-                  <li>owner/repo (imports entire repo)</li>
-                  <li>owner/repo/path/to/skill (imports subdirectory)</li>
-                </ul>
+              <div className="space-y-3">
+                <div className="space-y-2">
+                  <Label>GitHub URL or Shorthand</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      value={remoteUrl}
+                      onChange={(e) => {
+                        setRemoteUrl(e.target.value)
+                        setRemoteSkills([])
+                        setSelectedRemote(new Set())
+                        setBrowseError("")
+                      }}
+                      placeholder="owner/repo or owner/repo/path/to/skill"
+                      className="flex-1"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault()
+                          handleBrowseRemote()
+                        }
+                      }}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleBrowseRemote}
+                      disabled={browseLoading || !remoteUrl.trim()}
+                    >
+                      {browseLoading ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Search className="h-4 w-4" />
+                      )}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Enter a repo URL and press Browse to discover available skills, or provide a direct path to import.
+                  </p>
+                </div>
+
+                {/* Browse error */}
+                {browseError && (
+                  <p className="text-xs text-destructive">{browseError}</p>
+                )}
+
+                {/* Discovered skills list */}
+                {remoteSkills.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <Label>Available Skills ({remoteSkills.length})</Label>
+                      <button
+                        type="button"
+                        className="text-xs text-primary hover:underline"
+                        onClick={() => {
+                          if (selectedRemote.size === remoteSkills.length) {
+                            setSelectedRemote(new Set())
+                          } else {
+                            setSelectedRemote(new Set(remoteSkills.map((s) => s.subpath)))
+                          }
+                        }}
+                      >
+                        {selectedRemote.size === remoteSkills.length ? "Deselect All" : "Select All"}
+                      </button>
+                    </div>
+                    <div className="max-h-48 overflow-y-auto rounded-md border border-border">
+                      {remoteSkills.map((entry) => (
+                        <label
+                          key={entry.subpath}
+                          className="flex cursor-pointer items-center gap-3 px-3 py-2 transition-colors hover:bg-muted/50"
+                          onClick={() => {
+                            setSelectedRemote((prev) => {
+                              const next = new Set(prev)
+                              if (next.has(entry.subpath)) next.delete(entry.subpath)
+                              else next.add(entry.subpath)
+                              return next
+                            })
+                          }}
+                        >
+                          <div
+                            className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors ${
+                              selectedRemote.has(entry.subpath)
+                                ? "border-primary bg-primary text-primary-foreground"
+                                : "border-muted-foreground/30"
+                            }`}
+                          >
+                            {selectedRemote.has(entry.subpath) && (
+                              <Check className="h-3 w-3" />
+                            )}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-medium truncate">{entry.name}</p>
+                            {entry.description && (
+                              <p className="text-xs text-muted-foreground truncate">
+                                {entry.description}
+                              </p>
+                            )}
+                          </div>
+                          <span className="shrink-0 text-[10px] font-mono text-muted-foreground">
+                            {entry.subpath}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -292,14 +437,19 @@ export function Skills() {
               onClick={() => createMutation.mutate()}
               disabled={
                 createMutation.isPending ||
+                browseLoading ||
                 (addMode === "create" && !newName) ||
                 (addMode === "local" && !newSourcePath) ||
-                (addMode === "remote" && !remoteUrl)
+                (addMode === "remote" && !remoteUrl) ||
+                (addMode === "remote" && remoteSkills.length > 0 && selectedRemote.size === 0)
               }
             >
               {createMutation.isPending
-                ? addMode === "remote" ? "Downloading..." : "Adding..."
-                : addMode === "remote" ? "Import from GitHub"
+                ? addMode === "remote" ? "Importing..." : "Adding..."
+                : addMode === "remote"
+                  ? remoteSkills.length > 0
+                    ? `Import ${selectedRemote.size} Skill${selectedRemote.size !== 1 ? "s" : ""}`
+                    : "Import from GitHub"
                 : addMode === "local" ? "Import Skill"
                 : "Create Skill"}
             </Button>
