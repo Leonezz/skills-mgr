@@ -2,6 +2,8 @@
 
 Cross-agent skill management tool. Manage composable skill profiles that can be activated per-project across multiple AI coding agents (Claude Code, Cursor, Windsurf, etc.).
 
+Built on the [Agent Skills open standard](https://agentskills.io) (`SKILL.md` with YAML frontmatter), adopted by Claude Code, GitHub Copilot, Cursor, Windsurf, Gemini CLI, and others.
+
 ## Problem
 
 AI coding agents use skill/instruction files to customize behavior, but managing them is painful:
@@ -23,11 +25,24 @@ AI coding agents use skill/instruction files to customize behavior, but managing
 ├── sources.toml        # Skill provenance & hashes
 ├── profiles.toml       # Profile definitions
 ├── agents.toml         # Agent directory mappings
+├── logs/               # Rolling daily log files
 └── local/
     └── skills-mgr.db   # SQLite tracking DB
 ```
 
 Skills live in a central registry. Profiles compose skills into named sets. When you activate a profile, skills are copied to each agent's project directory. Deactivation cleans up only what's no longer needed.
+
+## Features
+
+- **Skill Registry** — Central store for all your skills with SHA-256 content hashing
+- **Composable Profiles** — Named skill sets with `includes` for profile inheritance
+- **Multi-Agent Support** — Deploy skills to Claude Code, Cursor, Windsurf, and more simultaneously
+- **GitHub Import** — Import skills directly from GitHub repos with `owner/repo` shorthand
+- **Multi-Skill Repo Browsing** — Discover and selectively import from collection repos like `anthropics/skills`
+- **Project Management** — Link profiles to projects, activate/deactivate per-project
+- **MCP Server** — Programmatic access via Model Context Protocol
+- **Desktop App** — Tauri 2 GUI with dark/light theme, activity logging, and auto-updater
+- **Structured Logging** — `tracing` with stderr + rolling daily log files
 
 ## Quick Start
 
@@ -47,6 +62,9 @@ skills-mgr agent add cursor \
 # Create skills
 skills-mgr skill create rust-patterns --description "Rust development patterns"
 skills-mgr skill create react-patterns --description "React development patterns"
+
+# Import from GitHub
+skills-mgr skill add anthropics/skills/skills/pdf
 
 # Build composable profiles
 skills-mgr profile create rust --add rust-patterns
@@ -90,11 +108,20 @@ Commands:
 skills-mgr skill list                          # List all skills
 skills-mgr skill create <name> --description   # Create new skill
 skills-mgr skill add <source>                  # Add from git/local/registry
+skills-mgr skill add anthropics/skills/skills/pdf  # Import from GitHub subdirectory
+skills-mgr skill add owner/repo               # Import entire repo as skill
 skills-mgr skill info <name>                   # Show details & files
 skills-mgr skill files <name>                  # List skill files
 skills-mgr skill remove <name>                 # Remove from registry
 skills-mgr skill open <name>                   # Open in editor
 ```
+
+Supported GitHub import formats:
+- `https://github.com/owner/repo/tree/main/path/to/skill` — Full URL with branch and subpath
+- `owner/repo` — Shorthand, defaults to `main` branch
+- `owner/repo/path/to/skill` — Shorthand with subpath
+
+The GUI also supports **browsing multi-skill repos** — enter a collection repo URL like `anthropics/skills` and the app discovers all skills in the repo, letting you select which ones to import.
 
 ### Profiles
 
@@ -188,10 +215,10 @@ crates/
 
 | Crate | Purpose |
 |-------|---------|
-| **skills-core** | Business logic, SQLite (sqlx), TOML config, SHA-256 hashing |
+| **skills-core** | Business logic, SQLite (sqlx), TOML config, SHA-256 hashing, GitHub tarball download |
 | **skills-cli** | Thin CLI wrapper using clap derive macros |
 | **skills-mcp** | MCP protocol server for programmatic access |
-| **skills-gui** | Tauri 2 desktop app with React 19, Tailwind CSS 4, shadcn/ui |
+| **skills-gui** | Tauri 2 desktop app with React 19, Tailwind CSS 4, shadcn/ui, auto-updater |
 
 ### Tech Stack
 
@@ -199,10 +226,13 @@ crates/
 - **Database**: SQLite with WAL mode (via sqlx)
 - **Config**: TOML (serde)
 - **Hashing**: SHA-256 tree hashes for content integrity
+- **Logging**: tracing + tracing-subscriber (stderr + rolling daily files)
 - **CLI**: clap 4 with derive macros
 - **GUI**: Tauri 2 + React 19 + TypeScript + Tailwind CSS 4 + shadcn/ui
+- **Updates**: tauri-plugin-updater with signed releases via GitHub Actions
 - **State**: @tanstack/react-query for frontend data fetching
 - **Validation**: Zod schemas for IPC data
+- **CI/CD**: GitHub Actions with tauri-apps/tauri-action for cross-platform builds
 
 ## Building
 
@@ -232,6 +262,17 @@ cargo tauri build
 ```bash
 cargo test --workspace
 ```
+
+## Releases
+
+Releases are built automatically via GitHub Actions when a version tag is pushed:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The CD pipeline builds for macOS (arm64 + x64), Linux, and Windows, signs the update artifacts, and publishes a GitHub Release with a `latest.json` manifest for the auto-updater.
 
 ## License
 
