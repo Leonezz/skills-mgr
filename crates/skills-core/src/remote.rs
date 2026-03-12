@@ -28,7 +28,10 @@ pub fn parse_github_url(input: &str) -> Result<GitHubSource> {
     // Shorthand: owner/repo or owner/repo/subpath
     let parts: Vec<&str> = input.splitn(3, '/').collect();
     if parts.len() < 2 {
-        bail!("Invalid GitHub reference: '{}'. Expected owner/repo or a GitHub URL.", input);
+        bail!(
+            "Invalid GitHub reference: '{}'. Expected owner/repo or a GitHub URL.",
+            input
+        );
     }
 
     let owner = parts[0].to_string();
@@ -188,9 +191,7 @@ async fn download_github_tarball(source: &GitHubSource) -> Result<(tempfile::Tem
 ///
 /// Returns the path to the extracted skill directory inside the temp dir.
 /// The caller is responsible for using the contents and cleaning up.
-pub async fn download_github_skill(
-    source: &GitHubSource,
-) -> Result<(tempfile::TempDir, PathBuf)> {
+pub async fn download_github_skill(source: &GitHubSource) -> Result<(tempfile::TempDir, PathBuf)> {
     let (tmp_dir, top_dir) = download_github_tarball(source).await?;
 
     // Resolve the target path (subpath within the repo)
@@ -321,11 +322,7 @@ pub fn scan_directory_for_skills(dir: &Path) -> Result<Vec<RemoteSkillEntry>> {
 }
 
 /// Recursively scan directories for SKILL.md files, up to 3 levels deep.
-fn scan_for_skills(
-    dir: &Path,
-    repo_root: &Path,
-    skills: &mut Vec<RemoteSkillEntry>,
-) -> Result<()> {
+fn scan_for_skills(dir: &Path, repo_root: &Path, skills: &mut Vec<RemoteSkillEntry>) -> Result<()> {
     scan_for_skills_inner(dir, repo_root, skills, 0)
 }
 
@@ -417,10 +414,7 @@ pub fn canonical_url(source: &GitHubSource) -> String {
             "https://github.com/{}/{}/tree/{}/{}",
             source.owner, source.repo, source.git_ref, subpath
         ),
-        None => format!(
-            "https://github.com/{}/{}",
-            source.owner, source.repo
-        ),
+        None => format!("https://github.com/{}/{}", source.owner, source.repo),
     }
 }
 
@@ -444,7 +438,9 @@ mod tests {
 
     #[test]
     fn test_parse_github_full_url() {
-        let s = parse_github_url("https://github.com/anthropics/skills/tree/main/skills/code-review").unwrap();
+        let s =
+            parse_github_url("https://github.com/anthropics/skills/tree/main/skills/code-review")
+                .unwrap();
         assert_eq!(s.owner, "anthropics");
         assert_eq!(s.repo, "skills");
         assert_eq!(s.git_ref, "main");
@@ -570,7 +566,10 @@ mod tests {
 
         assert_eq!(skills.len(), 2);
         assert_eq!(skills[0].name, "docx");
-        assert_eq!(skills[0].description.as_deref(), Some("Word document handling"));
+        assert_eq!(
+            skills[0].description.as_deref(),
+            Some("Word document handling")
+        );
         assert_eq!(skills[0].subpath, "skills/docx");
         assert_eq!(skills[1].name, "pdf");
         assert_eq!(skills[1].description.as_deref(), Some("PDF processing"));
@@ -608,8 +607,15 @@ mod tests {
     fn test_parse_skill_description_valid() {
         let tmp = tempfile::TempDir::new().unwrap();
         let path = tmp.path().join("SKILL.md");
-        std::fs::write(&path, "---\nname: test\ndescription: Hello world\n---\nBody").unwrap();
-        assert_eq!(parse_skill_description(&path), Some("Hello world".to_string()));
+        std::fs::write(
+            &path,
+            "---\nname: test\ndescription: Hello world\n---\nBody",
+        )
+        .unwrap();
+        assert_eq!(
+            parse_skill_description(&path),
+            Some("Hello world".to_string())
+        );
     }
 
     #[test]

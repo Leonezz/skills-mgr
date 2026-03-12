@@ -129,7 +129,10 @@ pub async fn run(dirs: &AppDirs, db: &Database, action: SkillAction) -> Result<(
                 )
                 .await?;
             } else {
-                println!("Source '{}' is not a local path or recognized remote URL.", source);
+                println!(
+                    "Source '{}' is not a local path or recognized remote URL.",
+                    source
+                );
                 println!("Supported formats:");
                 println!("  Local:  /path/to/skill-dir");
                 println!("  GitHub: https://github.com/owner/repo/tree/main/path");

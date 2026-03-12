@@ -2,7 +2,7 @@ mod commands;
 
 use commands::AppState;
 use skills_core::{AppDirs, Database};
-use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 fn init_tracing(log_dir: &std::path::Path) {
     let file_appender = tracing_appender::rolling::daily(log_dir, "skills-gui.log");

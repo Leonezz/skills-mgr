@@ -266,7 +266,14 @@ pub async fn import_from_browse(
             .unwrap_or_default();
 
         tracing::info!(skill = %skill_name, subpath = %subpath, "Importing from browse");
-        match registry.import_from_extracted_dir(&source_dir, &skill_name, owner, repo, git_ref, subpath) {
+        match registry.import_from_extracted_dir(
+            &source_dir,
+            &skill_name,
+            owner,
+            repo,
+            git_ref,
+            subpath,
+        ) {
             Ok(()) => imported.push(skill_name),
             Err(e) => {
                 tracing::error!(skill = %skill_name, error = %e, "Failed to import");
@@ -280,7 +287,11 @@ pub async fn import_from_browse(
 
     // Log to DB
     let details = if errors.is_empty() {
-        format!("Imported {} skills: {}", imported.len(), imported.join(", "))
+        format!(
+            "Imported {} skills: {}",
+            imported.len(),
+            imported.join(", ")
+        )
     } else {
         format!(
             "Imported {}, failed {}: {}",
@@ -297,7 +308,11 @@ pub async fn import_from_browse(
             operation: "skill_import_remote_batch",
             params: None,
             project_path: None,
-            result: if errors.is_empty() { "success" } else { "partial" },
+            result: if errors.is_empty() {
+                "success"
+            } else {
+                "partial"
+            },
             details: &details,
         },
     )
@@ -398,7 +413,10 @@ pub async fn list_profiles(state: State<'_, AppState>) -> Result<serde_json::Val
             .into_iter()
             .map(|(path, name)| {
                 let display = name.unwrap_or_else(|| path.clone());
-                ActiveProject { path, name: display }
+                ActiveProject {
+                    path,
+                    name: display,
+                }
             })
             .collect();
         result_profiles.push(ProfileInfo {
@@ -782,7 +800,11 @@ pub struct ProjectInfo {
 
 #[tauri::command]
 pub async fn list_projects(state: State<'_, AppState>) -> Result<Vec<ProjectInfo>, String> {
-    let projects = state.db.list_all_projects().await.map_err(|e| e.to_string())?;
+    let projects = state
+        .db
+        .list_all_projects()
+        .await
+        .map_err(|e| e.to_string())?;
     let mut result: Vec<ProjectInfo> = Vec::new();
     for project in projects {
         let linked_profiles = state
@@ -800,14 +822,12 @@ pub async fn list_projects(state: State<'_, AppState>) -> Result<Vec<ProjectInfo
             .get_all_placements_for_project(project.id)
             .await
             .unwrap_or_default();
-        let display_name = project
-            .name
-            .unwrap_or_else(|| {
-                std::path::Path::new(&project.path)
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_else(|| project.path.clone())
-            });
+        let display_name = project.name.unwrap_or_else(|| {
+            std::path::Path::new(&project.path)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| project.path.clone())
+        });
         result.push(ProjectInfo {
             path: project.path,
             name: display_name,
@@ -853,10 +873,7 @@ pub async fn add_project(
 }
 
 #[tauri::command]
-pub async fn remove_project(
-    state: State<'_, AppState>,
-    path: String,
-) -> Result<String, String> {
+pub async fn remove_project(state: State<'_, AppState>, path: String) -> Result<String, String> {
     let project_id = state
         .db
         .get_or_create_project(&path, None)
@@ -968,7 +985,11 @@ pub async fn activate_project(
             operation: "project_activate",
             params: None,
             project_path: Some(&project_path),
-            result: if errors.is_empty() { "success" } else { "partial" },
+            result: if errors.is_empty() {
+                "success"
+            } else {
+                "partial"
+            },
             details: &format!("Activated {} profiles", activated.len()),
         },
     )
@@ -1013,7 +1034,11 @@ pub async fn deactivate_project(
             operation: "project_deactivate",
             params: None,
             project_path: Some(&project_path),
-            result: if errors.is_empty() { "success" } else { "partial" },
+            result: if errors.is_empty() {
+                "success"
+            } else {
+                "partial"
+            },
             details: &format!("Deactivated {} profiles", deactivated.len()),
         },
     )

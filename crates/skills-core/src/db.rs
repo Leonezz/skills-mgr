@@ -134,11 +134,10 @@ impl Database {
     }
 
     pub async fn list_all_projects(&self) -> Result<Vec<ProjectRow>> {
-        let rows = sqlx::query_as::<_, ProjectRow>(
-            "SELECT id, path, name FROM projects ORDER BY id",
-        )
-        .fetch_all(&self.pool)
-        .await?;
+        let rows =
+            sqlx::query_as::<_, ProjectRow>("SELECT id, path, name FROM projects ORDER BY id")
+                .fetch_all(&self.pool)
+                .await?;
         Ok(rows)
     }
 
@@ -418,7 +417,10 @@ impl Database {
         Ok(rows.into_iter().map(|(name,)| name).collect())
     }
 
-    pub async fn get_projects_for_profile(&self, profile_name: &str) -> Result<Vec<(String, Option<String>)>> {
+    pub async fn get_projects_for_profile(
+        &self,
+        profile_name: &str,
+    ) -> Result<Vec<(String, Option<String>)>> {
         let rows: Vec<(String, Option<String>)> = sqlx::query_as(
             "SELECT p.path, p.name FROM projects p
              INNER JOIN project_profiles pp ON p.id = pp.project_id
@@ -433,11 +435,7 @@ impl Database {
 
     // --- Project Linked Profiles ---
 
-    pub async fn link_profile_to_project(
-        &self,
-        project_id: i64,
-        profile_name: &str,
-    ) -> Result<()> {
+    pub async fn link_profile_to_project(&self, project_id: i64, profile_name: &str) -> Result<()> {
         let now = chrono::Utc::now()
             .format("%Y-%m-%dT%H:%M:%S%.3fZ")
             .to_string();
@@ -457,11 +455,13 @@ impl Database {
         project_id: i64,
         profile_name: &str,
     ) -> Result<()> {
-        sqlx::query("DELETE FROM project_linked_profiles WHERE project_id = ? AND profile_name = ?")
-            .bind(project_id)
-            .bind(profile_name)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(
+            "DELETE FROM project_linked_profiles WHERE project_id = ? AND profile_name = ?",
+        )
+        .bind(project_id)
+        .bind(profile_name)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 

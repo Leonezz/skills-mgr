@@ -401,10 +401,7 @@ fn update_frontmatter_description(content: &str, new_description: &str) -> Strin
     let trimmed = content.trim();
     if !trimmed.starts_with("---") {
         // No frontmatter — prepend one
-        return format!(
-            "---\ndescription: {}\n---\n\n{}",
-            new_description, content
-        );
+        return format!("---\ndescription: {}\n---\n\n{}", new_description, content);
     }
     let after_first = &trimmed[3..];
     if let Some(end) = after_first.find("---") {
