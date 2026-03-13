@@ -17,7 +17,6 @@ pub struct SkillMeta {
     pub token_estimate: u64,
 }
 
-
 /// Manages the skill registry directory.
 pub struct Registry {
     dirs: AppDirs,
