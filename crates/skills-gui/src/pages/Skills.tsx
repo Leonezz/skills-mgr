@@ -38,6 +38,18 @@ import {
 } from "lucide-react"
 import type { Skill } from "@/lib/schemas"
 
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
+  return String(n)
+}
+
+function formatBytes(n: number): string {
+  if (n >= 1_048_576) return `${(n / 1_048_576).toFixed(1)} MB`
+  if (n >= 1_024) return `${(n / 1_024).toFixed(1)} KB`
+  return `${n} B`
+}
+
 export function Skills() {
   const queryClient = useQueryClient()
   const { data: skills, isLoading } = useQuery({
@@ -670,6 +682,14 @@ export function Skills() {
                 <span className="text-muted-foreground">Files</span>
                 <span>{detail?.files.length ?? 0} files</span>
               </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Size</span>
+                <span>{detail ? formatBytes(detail.total_bytes) : "—"}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Token Estimate</span>
+                <span>~{detail ? formatTokens(detail.token_estimate) : "0"} tokens</span>
+              </div>
               {detail && detail.files.length > 0 && (
                 <div className="mt-2 max-h-32 overflow-y-auto rounded-md border border-border p-2">
                   {detail.files.map((f) => (
@@ -775,6 +795,9 @@ export function Skills() {
                         )}
                         <span className="text-[11px] text-muted-foreground">
                           {skill.files.length} file{skill.files.length !== 1 ? "s" : ""}
+                        </span>
+                        <span className="text-[11px] text-muted-foreground">
+                          ~{formatTokens(skill.token_estimate)} tokens
                         </span>
                         {fileExtensions(skill.files).map((ext) => (
                           <span

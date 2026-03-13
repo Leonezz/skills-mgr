@@ -354,51 +354,41 @@ async fn run_doctor(dirs: &AppDirs, _db: &Database) -> Result<()> {
     Ok(())
 }
 
-fn run_budget(dirs: &AppDirs, profile: Option<String>, project: Option<String>) -> Result<()> {
+fn run_budget(dirs: &AppDirs, profile: Option<String>, _project: Option<String>) -> Result<()> {
     let profiles_config = ProfilesConfig::load(&dirs.profiles_toml())?;
     let registry = Registry::new(dirs.clone());
 
-    let skills_to_budget = if let Some(profile_name) = &profile {
+    let skill_names = if let Some(profile_name) = &profile {
         profiles::resolve_profile(&profiles_config, profile_name, true)?
     } else {
-        // Budget all skills in registry
         registry.list()?.into_iter().map(|s| s.name).collect()
     };
 
-    let _ = project; // project filtering not needed for budget
-
     let mut total_bytes: u64 = 0;
+    let mut total_tokens: u64 = 0;
     let mut total_files = 0;
 
-    for skill_name in &skills_to_budget {
-        let skill_dir = dirs.registry().join(skill_name);
-        if !skill_dir.exists() {
-            println!("  {} — not found", skill_name);
-            continue;
-        }
-        let mut skill_bytes: u64 = 0;
-        let mut skill_files = 0;
-        for entry in walkdir(&skill_dir) {
-            if let Ok(meta) = std::fs::metadata(&entry)
-                && meta.is_file()
-            {
-                skill_bytes += meta.len();
-                skill_files += 1;
+    for skill_name in &skill_names {
+        match registry.get(skill_name)? {
+            Some(skill) => {
+                println!(
+                    "  {} — {} files, {} bytes (~{} tokens)",
+                    skill.name,
+                    skill.files.len(),
+                    skill.total_bytes,
+                    skill.token_estimate
+                );
+                total_bytes += skill.total_bytes;
+                total_tokens += skill.token_estimate;
+                total_files += skill.files.len();
             }
+            None => println!("  {} — not found", skill_name),
         }
-        let est_tokens = skill_bytes / 4; // rough: ~4 bytes per token
-        println!(
-            "  {} — {} files, {} bytes (~{} tokens)",
-            skill_name, skill_files, skill_bytes, est_tokens
-        );
-        total_bytes += skill_bytes;
-        total_files += skill_files;
     }
 
-    let total_tokens = total_bytes / 4;
     println!(
         "\nTotal: {} skills, {} files, {} bytes (~{} tokens)",
-        skills_to_budget.len(),
+        skill_names.len(),
         total_files,
         total_bytes,
         total_tokens
@@ -408,20 +398,4 @@ fn run_budget(dirs: &AppDirs, profile: Option<String>, project: Option<String>) 
     }
 
     Ok(())
-}
-
-/// Simple recursive file listing for budget calculation.
-fn walkdir(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
-    let mut files = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                files.extend(walkdir(&path));
-            } else {
-                files.push(path);
-            }
-        }
-    }
-    files
 }

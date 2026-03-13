@@ -22,6 +22,8 @@ pub struct SkillInfo {
     pub source_ref: Option<String>,
     pub is_builtin: bool,
     pub dir_path: String,
+    pub total_bytes: u64,
+    pub token_estimate: u64,
 }
 
 #[derive(Serialize)]
@@ -82,6 +84,8 @@ pub async fn list_skills(state: State<'_, AppState>) -> Result<Vec<SkillInfo>, S
                 source_ref,
                 is_builtin,
                 dir_path,
+                total_bytes: s.total_bytes,
+                token_estimate: s.token_estimate,
             }
         })
         .collect())

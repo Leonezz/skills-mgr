@@ -13,6 +13,26 @@ pub struct SkillMeta {
     pub dir_path: PathBuf,
     pub files: Vec<String>,
     pub source: Option<SkillSource>,
+    pub total_bytes: u64,
+    pub token_estimate: u64,
+}
+
+/// Compute total bytes and estimated tokens for a skill directory.
+fn compute_skill_size(dir: &Path) -> (u64, u64) {
+    let mut total: u64 = 0;
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let (sub, _) = compute_skill_size(&path);
+                total += sub;
+            } else if let Ok(meta) = std::fs::metadata(&path) {
+                total += meta.len();
+            }
+        }
+    }
+    // ~4 bytes per token is a reasonable approximation for mixed text/code
+    (total, total / 4)
 }
 
 /// Manages the skill registry directory.
@@ -50,6 +70,7 @@ impl Registry {
             let description = parse_description(&skill_md).ok();
             let files = list_files_recursive(&skill_dir)?;
             let source = sources.skills.get(&name).cloned();
+            let (total_bytes, token_estimate) = compute_skill_size(&skill_dir);
 
             skills.push(SkillMeta {
                 name,
@@ -57,6 +78,8 @@ impl Registry {
                 dir_path: skill_dir,
                 files,
                 source,
+                total_bytes,
+                token_estimate,
             });
         }
 
@@ -76,6 +99,7 @@ impl Registry {
         let description = parse_description(&skill_md).ok();
         let files = list_files_recursive(&skill_dir)?;
         let source = sources.skills.get(name).cloned();
+        let (total_bytes, token_estimate) = compute_skill_size(&skill_dir);
 
         Ok(Some(SkillMeta {
             name: name.to_string(),
@@ -83,6 +107,8 @@ impl Registry {
             dir_path: skill_dir,
             files,
             source,
+            total_bytes,
+            token_estimate,
         }))
     }
 

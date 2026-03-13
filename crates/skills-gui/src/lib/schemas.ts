@@ -9,6 +9,8 @@ export const SkillSchema = z.object({
   source_ref: z.string().nullable(),
   is_builtin: z.boolean(),
   dir_path: z.string(),
+  total_bytes: z.number(),
+  token_estimate: z.number(),
 })
 
 export const ProfileSchema = z.object({
