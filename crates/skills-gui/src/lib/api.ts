@@ -88,6 +88,20 @@ export async function deleteProfile(name: string) {
   return await invoke("delete_profile", { name }) as string
 }
 
+// --- Global Skills ---
+
+export async function activateGlobal() {
+  return await invoke("activate_global") as string
+}
+
+export async function deactivateGlobal() {
+  return await invoke("deactivate_global") as string
+}
+
+export async function editGlobalSkills(skills: string[]) {
+  return await invoke("edit_global_skills", { skills }) as string
+}
+
 // --- Agents ---
 
 export async function listAgents() {

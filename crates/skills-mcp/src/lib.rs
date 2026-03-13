@@ -247,6 +247,32 @@ impl SkillsMcpServer {
                 }
             },
             {
+                "name": "global_status",
+                "description": "Get global skills status",
+                "inputSchema": { "type": "object", "properties": {} }
+            },
+            {
+                "name": "activate_global",
+                "description": "Activate global skills (place into agent global paths)",
+                "inputSchema": { "type": "object", "properties": {} }
+            },
+            {
+                "name": "deactivate_global",
+                "description": "Deactivate global skills (remove from agent global paths)",
+                "inputSchema": { "type": "object", "properties": {} }
+            },
+            {
+                "name": "edit_global_skills",
+                "description": "Set the global skills list",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "skills": { "type": "array", "items": { "type": "string" } }
+                    },
+                    "required": ["skills"]
+                }
+            },
+            {
                 "name": "get_status",
                 "description": "Get active profiles and placements for a project",
                 "inputSchema": {
@@ -483,6 +509,92 @@ impl SkillsMcpServer {
                     "Deactivated '{}': {} removed, {} kept",
                     result.profile_name, result.files_removed, result.files_kept
                 ))
+            }
+            "global_status" => {
+                let config = ProfilesConfig::load(&self.dirs.profiles_toml())?;
+                let status = skills_core::placements::global_status(&self.db, &config).await?;
+                Ok(serde_json::to_string_pretty(&json!({
+                    "configured_skills": status.configured_skills,
+                    "placed_skills": status.placed_skills,
+                    "is_active": status.is_active,
+                }))?)
+            }
+            "activate_global" => {
+                let config = ProfilesConfig::load(&self.dirs.profiles_toml())?;
+                let agents_config = AgentsConfig::load(&self.dirs.agents_toml())?;
+                let result = skills_core::placements::activate_global(
+                    &self.dirs,
+                    &self.db,
+                    &config,
+                    &agents_config,
+                )
+                .await?;
+                let _ = logging::log(
+                    &self.db,
+                    LogEntry {
+                        source: Source::Mcp,
+                        agent_name: None,
+                        operation: "global_activate",
+                        params: None,
+                        project_path: None,
+                        result: "success",
+                        details: &format!(
+                            "Activated global skills: {} placements",
+                            result.total_placements
+                        ),
+                    },
+                )
+                .await;
+                Ok(format!(
+                    "Activated {} global skills ({} placements)",
+                    result.skills_placed, result.total_placements
+                ))
+            }
+            "deactivate_global" => {
+                let result = skills_core::placements::deactivate_global(&self.db).await?;
+                let _ = logging::log(
+                    &self.db,
+                    LogEntry {
+                        source: Source::Mcp,
+                        agent_name: None,
+                        operation: "global_deactivate",
+                        params: None,
+                        project_path: None,
+                        result: "success",
+                        details: &format!(
+                            "Deactivated global skills: {} removed",
+                            result.files_removed
+                        ),
+                    },
+                )
+                .await;
+                Ok(format!(
+                    "Deactivated global skills: {} removed",
+                    result.files_removed
+                ))
+            }
+            "edit_global_skills" => {
+                let skills: Vec<String> = args
+                    .get("skills")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok())
+                    .unwrap_or_default();
+                let mut config = ProfilesConfig::load(&self.dirs.profiles_toml())?;
+                config.global.skills = skills.clone();
+                config.save(&self.dirs.profiles_toml())?;
+                let _ = logging::log(
+                    &self.db,
+                    LogEntry {
+                        source: Source::Mcp,
+                        agent_name: None,
+                        operation: "global_edit",
+                        params: None,
+                        project_path: None,
+                        result: "success",
+                        details: &format!("Updated global skills: {}", skills.join(", ")),
+                    },
+                )
+                .await;
+                Ok(format!("Updated global skills: {}", skills.join(", ")))
             }
             "get_status" => {
                 let project_path = args

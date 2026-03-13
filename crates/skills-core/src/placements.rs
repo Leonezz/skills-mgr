@@ -238,6 +238,159 @@ pub struct ProjectStatus {
     pub placement_count: usize,
 }
 
+// --- Global Skills ---
+
+pub const GLOBAL_PROJECT_PATH: &str = "__global__";
+const GLOBAL_PROFILE_NAME: &str = "__global__";
+
+#[derive(Debug)]
+pub struct GlobalActivationResult {
+    pub skills_placed: usize,
+    pub agents_used: Vec<String>,
+    pub total_placements: usize,
+}
+
+#[derive(Debug)]
+pub struct GlobalDeactivationResult {
+    pub files_removed: usize,
+}
+
+#[derive(Debug)]
+pub struct GlobalStatus {
+    pub configured_skills: Vec<String>,
+    pub placed_skills: Vec<String>,
+    pub is_active: bool,
+}
+
+fn expand_tilde(path: &str) -> String {
+    if let (Some(rest), Some(home)) = (path.strip_prefix("~/"), dirs::home_dir()) {
+        return format!("{}/{}", home.display(), rest);
+    }
+    path.to_string()
+}
+
+/// Activate global skills — place them into each agent's global_path.
+pub async fn activate_global(
+    dirs: &AppDirs,
+    db: &Database,
+    profiles_config: &ProfilesConfig,
+    agents_config: &AgentsConfig,
+) -> Result<GlobalActivationResult> {
+    let global_skills = &profiles_config.global.skills;
+    if global_skills.is_empty() {
+        bail!("No global skills configured. Add skills to [global] in profiles.toml.");
+    }
+
+    let project_id = db
+        .get_or_create_project(GLOBAL_PROJECT_PATH, Some("Global Skills"))
+        .await?;
+
+    let agents: Vec<(String, String)> = agents_config
+        .agents
+        .iter()
+        .filter(|(_, def)| def.enabled)
+        .map(|(name, def)| (name.clone(), expand_tilde(&def.global_path)))
+        .collect();
+
+    if agents.is_empty() {
+        bail!("No agents configured.");
+    }
+
+    let mut total_placements = 0;
+    for skill_name in global_skills {
+        if !dirs.registry().join(skill_name).join("SKILL.md").exists() {
+            bail!("Skill '{}' not found in registry", skill_name);
+        }
+
+        for (agent_name, global_path) in &agents {
+            let target = PathBuf::from(global_path).join(skill_name);
+            let target_str = target.to_string_lossy().to_string();
+
+            let src = dirs.registry().join(skill_name);
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            if target.exists() {
+                std::fs::remove_dir_all(&target)?;
+            }
+            registry::copy_dir_recursive(&src, &target)?;
+
+            let placement_id = db
+                .insert_placement(project_id, skill_name, agent_name, &target_str)
+                .await?;
+            db.link_placement_profile(placement_id, GLOBAL_PROFILE_NAME)
+                .await?;
+            total_placements += 1;
+        }
+    }
+
+    db.activate_project_profile(project_id, GLOBAL_PROFILE_NAME)
+        .await?;
+
+    Ok(GlobalActivationResult {
+        skills_placed: global_skills.len(),
+        agents_used: agents.iter().map(|(n, _)| n.clone()).collect(),
+        total_placements,
+    })
+}
+
+/// Deactivate global skills — remove placements from agent global_paths.
+pub async fn deactivate_global(db: &Database) -> Result<GlobalDeactivationResult> {
+    let project_id = db
+        .get_or_create_project(GLOBAL_PROJECT_PATH, Some("Global Skills"))
+        .await?;
+
+    let placements = db
+        .get_placements_for_project_profile(project_id, GLOBAL_PROFILE_NAME)
+        .await?;
+
+    let mut files_removed = 0;
+    for placement in &placements {
+        db.unlink_placement_profile(placement.id, GLOBAL_PROFILE_NAME)
+            .await?;
+        let remaining = db.get_placement_profile_count(placement.id).await?;
+
+        if remaining == 0 {
+            let target = Path::new(&placement.target_path);
+            if target.exists() {
+                std::fs::remove_dir_all(target)?;
+            }
+            db.delete_placement(placement.id).await?;
+            files_removed += 1;
+        }
+    }
+
+    db.deactivate_project_profile(project_id, GLOBAL_PROFILE_NAME)
+        .await?;
+
+    Ok(GlobalDeactivationResult { files_removed })
+}
+
+/// Get current global skills status.
+pub async fn global_status(
+    db: &Database,
+    profiles_config: &ProfilesConfig,
+) -> Result<GlobalStatus> {
+    let project_id = db
+        .get_or_create_project(GLOBAL_PROJECT_PATH, Some("Global Skills"))
+        .await?;
+    let active = db.get_active_profiles(project_id).await?;
+    let placements = db.get_all_placements_for_project(project_id).await?;
+
+    let placed_skills: Vec<String> = placements
+        .iter()
+        .map(|p| p.skill_name.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+
+    Ok(GlobalStatus {
+        configured_skills: profiles_config.global.skills.clone(),
+        placed_skills,
+        is_active: active.contains(&GLOBAL_PROFILE_NAME.to_string()),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,6 +422,7 @@ mod tests {
         }
 
         let profiles_config = ProfilesConfig {
+            global: GlobalConfig::default(),
             base: BaseConfig {
                 skills: vec!["code-review".into()],
             },
