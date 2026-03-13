@@ -5,7 +5,7 @@ export function formatTokens(n: number): string {
 }
 
 export function formatBytes(n: number): string {
-  if (n >= 1_048_576) return `${(n / 1_048_576).toFixed(1)} MB`
-  if (n >= 1_024) return `${(n / 1_024).toFixed(1)} KB`
+  if (n >= 1_048_576) return `${(n / 1_048_576).toFixed(1)} MiB`
+  if (n >= 1_024) return `${(n / 1_024).toFixed(1)} KiB`
   return `${n} B`
 }

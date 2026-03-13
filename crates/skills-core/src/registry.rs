@@ -366,7 +366,8 @@ const BINARY_EXTENSIONS: &[&str] = &[
     "tar", "gz", "zip", "wasm", "bin", "exe", "dll", "so", "dylib", "o", "a", // fonts
     "ttf", "otf", "woff", "woff2", "eot", // media
     "mp3", "mp4", "mov", "avi", "mkv", "webm", "flac", "wav", // documents / databases
-    "pdf", "db", "sqlite", "sqlite3",
+    "pdf", "db", "sqlite", "sqlite3", // generated lockfiles
+    "lock",
 ];
 
 fn is_text_file(path: &Path) -> bool {
@@ -383,8 +384,9 @@ fn list_files_with_stats(dir: &Path) -> Result<(Vec<String>, u64, u64)> {
     let mut total_bytes: u64 = 0;
     list_files_inner(dir, dir, &mut files, Some(&mut total_bytes))?;
     files.sort();
-    // ~4 bytes per token is a reasonable approximation for text/code
-    Ok((files, total_bytes, total_bytes / 4))
+    /// Rough approximation: one token ~ 4 bytes of UTF-8 text/code.
+    const BYTES_PER_TOKEN: u64 = 4;
+    Ok((files, total_bytes, total_bytes / BYTES_PER_TOKEN))
 }
 
 /// List all files in a directory recursively, returning relative paths sorted.
