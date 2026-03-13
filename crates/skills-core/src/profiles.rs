@@ -129,7 +129,7 @@ pub fn validate_skills_exist(config: &ProfilesConfig, registry_skills: &[String]
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{BaseConfig, ProfileDef};
+    use crate::config::{BaseConfig, GlobalConfig, ProfileDef};
     use std::collections::BTreeMap;
 
     fn make_config() -> ProfilesConfig {
@@ -160,6 +160,7 @@ mod tests {
         );
 
         ProfilesConfig {
+            global: GlobalConfig::default(),
             base: BaseConfig {
                 skills: vec!["code-review".into(), "obsidian".into()],
             },
@@ -222,6 +223,7 @@ mod tests {
             },
         );
         let config = ProfilesConfig {
+            global: GlobalConfig::default(),
             base: BaseConfig::default(),
             profiles,
         };
@@ -294,6 +296,7 @@ mod tests {
             },
         );
         let config = ProfilesConfig {
+            global: GlobalConfig::default(),
             base: BaseConfig::default(),
             profiles,
         };

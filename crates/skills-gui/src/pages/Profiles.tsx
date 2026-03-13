@@ -18,9 +18,12 @@ import {
   editProfile,
   deleteProfile,
   listSkills,
+  activateGlobal,
+  deactivateGlobal,
+  editGlobalSkills,
 } from "@/lib/api"
 import { toast } from "sonner"
-import { Plus, MoreVertical, Layers } from "lucide-react"
+import { Plus, MoreVertical, Layers, Globe } from "lucide-react"
 import type { Profile } from "@/lib/schemas"
 
 export function Profiles() {
@@ -84,6 +87,44 @@ export function Profiles() {
     },
     onError: (err) => toast.error(String(err)),
   })
+
+  // Global skills state
+  const [showGlobalEdit, setShowGlobalEdit] = useState(false)
+  const [globalSkillsDraft, setGlobalSkillsDraft] = useState<string[]>([])
+  const globalInfo = data?.global
+
+  const activateGlobalMutation = useMutation({
+    mutationFn: activateGlobal,
+    onSuccess: (msg) => {
+      toast.success(msg)
+      queryClient.invalidateQueries({ queryKey: ["profiles"] })
+    },
+    onError: (err) => toast.error(String(err)),
+  })
+
+  const deactivateGlobalMutation = useMutation({
+    mutationFn: deactivateGlobal,
+    onSuccess: (msg) => {
+      toast.success(msg)
+      queryClient.invalidateQueries({ queryKey: ["profiles"] })
+    },
+    onError: (err) => toast.error(String(err)),
+  })
+
+  const editGlobalMutation = useMutation({
+    mutationFn: (skills: string[]) => editGlobalSkills(skills),
+    onSuccess: (msg) => {
+      toast.success(msg)
+      queryClient.invalidateQueries({ queryKey: ["profiles"] })
+      setShowGlobalEdit(false)
+    },
+    onError: (err) => toast.error(String(err)),
+  })
+
+  function openGlobalEdit() {
+    setGlobalSkillsDraft(globalInfo?.skills ?? [])
+    setShowGlobalEdit(true)
+  }
 
   function closeCreate() {
     setShowCreate(false)
@@ -302,6 +343,111 @@ export function Profiles() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Global Skills Edit Dialog */}
+      <Dialog open={showGlobalEdit} onOpenChange={(o) => { if (!o) setShowGlobalEdit(false) }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Global Skills</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Global skills are placed in each agent&apos;s global path (machine-level, not per-project).
+            </p>
+            <div className="space-y-2">
+              <Label>Skills</Label>
+              <TagInput
+                value={globalSkillsDraft}
+                onChange={setGlobalSkillsDraft}
+                suggestions={skillSuggestions}
+                placeholder="Search and add skills..."
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowGlobalEdit(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => editGlobalMutation.mutate(globalSkillsDraft)}
+              disabled={editGlobalMutation.isPending}
+            >
+              {editGlobalMutation.isPending ? "Saving..." : "Save"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Global Skills Card */}
+      {globalInfo && (
+        <div className="shrink-0 mb-4">
+          <div className="rounded-xl border border-border bg-card p-5">
+            <div className="flex items-start gap-4">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px] bg-blue-500/10">
+                <Globe className="h-5 w-5 text-blue-500" />
+              </div>
+              <div className="flex-1 space-y-2 min-w-0">
+                <div className="flex items-center gap-2.5">
+                  <span className="text-[15px] font-semibold">Global Skills</span>
+                  <Badge variant={globalInfo.is_active ? "default" : "secondary"} className="text-[10px]">
+                    {globalInfo.is_active ? "ACTIVE" : "INACTIVE"}
+                  </Badge>
+                </div>
+                <p className="text-[13px] text-muted-foreground">
+                  Skills placed in each agent&apos;s global path (machine-level)
+                </p>
+                {globalInfo.skills.length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {globalInfo.skills.map((s) => (
+                      <span
+                        key={s}
+                        className="rounded bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground"
+                      >
+                        {s}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                  <span>{globalInfo.skills.length} skill{globalInfo.skills.length !== 1 ? "s" : ""} configured</span>
+                  {globalInfo.placed_skills.length > 0 && (
+                    <span className="text-emerald-600 dark:text-emerald-400">
+                      {globalInfo.placed_skills.length} placed
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div className="flex shrink-0 gap-2">
+                {globalInfo.is_active ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => deactivateGlobalMutation.mutate()}
+                    disabled={deactivateGlobalMutation.isPending}
+                  >
+                    {deactivateGlobalMutation.isPending ? "..." : "Deactivate"}
+                  </Button>
+                ) : (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => activateGlobalMutation.mutate()}
+                    disabled={activateGlobalMutation.isPending || globalInfo.skills.length === 0}
+                  >
+                    {activateGlobalMutation.isPending ? "..." : "Activate"}
+                  </Button>
+                )}
+                <button
+                  onClick={openGlobalEdit}
+                  className="shrink-0 rounded p-1.5 text-muted-foreground transition-colors hover:text-foreground hover:bg-muted"
+                >
+                  <MoreVertical className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Profile List — scrollable */}
       <div className="flex-1 min-h-0 overflow-y-auto">

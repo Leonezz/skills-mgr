@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use skills_core::config::{AgentDef, AgentsConfig, AppSettings, ProfileDef, ProfilesConfig};
 use skills_core::logging::{self, LogEntry, Source};
 use skills_core::placements;
+use skills_core::placements::GLOBAL_PROJECT_PATH;
 use skills_core::profiles;
 use skills_core::{AppDirs, Database, Registry};
 use tauri::State;
@@ -427,8 +428,17 @@ pub async fn list_profiles(state: State<'_, AppState>) -> Result<serde_json::Val
             active_projects,
         });
     }
+    let global_status = placements::global_status(&state.db, &config)
+        .await
+        .map_err(|e| e.to_string())?;
+
     Ok(serde_json::json!({
         "base": { "skills": config.base.skills },
+        "global": {
+            "skills": global_status.configured_skills,
+            "placed_skills": global_status.placed_skills,
+            "is_active": global_status.is_active,
+        },
         "profiles": result_profiles,
     }))
 }
@@ -787,6 +797,104 @@ pub async fn deactivate_profile(
     ))
 }
 
+// --- Global Skills ---
+
+#[tauri::command]
+pub async fn get_global_status(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    let config = ProfilesConfig::load(&state.dirs.profiles_toml()).map_err(|e| e.to_string())?;
+    let status = placements::global_status(&state.db, &config)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({
+        "configured_skills": status.configured_skills,
+        "placed_skills": status.placed_skills,
+        "is_active": status.is_active,
+    }))
+}
+
+#[tauri::command]
+pub async fn activate_global(state: State<'_, AppState>) -> Result<String, String> {
+    let config = ProfilesConfig::load(&state.dirs.profiles_toml()).map_err(|e| e.to_string())?;
+    let agents_config = AgentsConfig::load(&state.dirs.agents_toml()).map_err(|e| e.to_string())?;
+    let result = placements::activate_global(&state.dirs, &state.db, &config, &agents_config)
+        .await
+        .map_err(|e| e.to_string())?;
+    let _ = logging::log(
+        &state.db,
+        LogEntry {
+            source: Source::Gui,
+            agent_name: None,
+            operation: "global_activate",
+            params: None,
+            project_path: None,
+            result: "success",
+            details: &format!(
+                "Activated global skills: {} placements",
+                result.total_placements
+            ),
+        },
+    )
+    .await;
+    Ok(format!(
+        "Activated {} global skills ({} placements)",
+        result.skills_placed, result.total_placements
+    ))
+}
+
+#[tauri::command]
+pub async fn deactivate_global(state: State<'_, AppState>) -> Result<String, String> {
+    let result = placements::deactivate_global(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+    let _ = logging::log(
+        &state.db,
+        LogEntry {
+            source: Source::Gui,
+            agent_name: None,
+            operation: "global_deactivate",
+            params: None,
+            project_path: None,
+            result: "success",
+            details: &format!(
+                "Deactivated global skills: {} removed",
+                result.files_removed
+            ),
+        },
+    )
+    .await;
+    Ok(format!(
+        "Deactivated global skills: {} removed",
+        result.files_removed
+    ))
+}
+
+#[tauri::command]
+pub async fn edit_global_skills(
+    state: State<'_, AppState>,
+    skills: Vec<String>,
+) -> Result<String, String> {
+    let mut config =
+        ProfilesConfig::load(&state.dirs.profiles_toml()).map_err(|e| e.to_string())?;
+    config.global.skills = skills.clone();
+    config
+        .save(&state.dirs.profiles_toml())
+        .map_err(|e| e.to_string())?;
+    let _ = logging::log(
+        &state.db,
+        LogEntry {
+            source: Source::Gui,
+            agent_name: None,
+            operation: "global_edit",
+            params: None,
+            project_path: None,
+            result: "success",
+            details: &format!("Updated global skills: {}", skills.join(", ")),
+        },
+    )
+    .await;
+    Ok(format!("Updated global skills: {}", skills.join(", ")))
+}
+
 // --- Projects ---
 
 #[derive(Serialize)]
@@ -806,7 +914,10 @@ pub async fn list_projects(state: State<'_, AppState>) -> Result<Vec<ProjectInfo
         .await
         .map_err(|e| e.to_string())?;
     let mut result: Vec<ProjectInfo> = Vec::new();
-    for project in projects {
+    for project in projects
+        .into_iter()
+        .filter(|p| p.path != GLOBAL_PROJECT_PATH)
+    {
         let linked_profiles = state
             .db
             .get_linked_profiles(project.id)

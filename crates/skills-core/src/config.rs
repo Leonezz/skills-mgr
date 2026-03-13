@@ -102,9 +102,17 @@ pub enum SourceType {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProfilesConfig {
     #[serde(default)]
+    pub global: GlobalConfig,
+    #[serde(default)]
     pub base: BaseConfig,
     #[serde(default)]
     pub profiles: std::collections::BTreeMap<String, ProfileDef>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GlobalConfig {
+    #[serde(default)]
+    pub skills: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -282,6 +290,7 @@ mod tests {
         let path = tmp.path().join("profiles.toml");
 
         let config = ProfilesConfig {
+            global: GlobalConfig::default(),
             base: BaseConfig {
                 skills: vec!["code-review".into(), "obsidian".into()],
             },

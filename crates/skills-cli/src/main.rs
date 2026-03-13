@@ -31,6 +31,11 @@ enum Commands {
         #[command(subcommand)]
         action: AgentAction,
     },
+    /// Manage global skills (placed in agent global paths)
+    Global {
+        #[command(subcommand)]
+        action: GlobalAction,
+    },
     /// Show active profiles and placements for a project
     Status {
         /// Target project path (default: current directory)
@@ -141,6 +146,26 @@ pub enum ProfileAction {
 }
 
 #[derive(Subcommand)]
+pub enum GlobalAction {
+    /// Show current global skills status
+    Status,
+    /// Activate global skills (place into agent global paths)
+    Activate,
+    /// Deactivate global skills (remove from agent global paths)
+    Deactivate,
+    /// Add skills to the global configuration
+    Add {
+        #[arg(required = true, num_args = 1..)]
+        skills: Vec<String>,
+    },
+    /// Remove skills from the global configuration
+    Remove {
+        #[arg(required = true, num_args = 1..)]
+        skills: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
 pub enum AgentAction {
     List,
     Add {
@@ -179,6 +204,7 @@ async fn main() -> Result<()> {
         Commands::Skill { action } => commands::skill::run(&dirs, &db, action).await?,
         Commands::Profile { action } => commands::profile::run(&dirs, &db, action).await?,
         Commands::Agent { action } => commands::agent::run(&dirs, &db, action).await?,
+        Commands::Global { action } => commands::global::run(&dirs, &db, action).await?,
         Commands::Status { project } => commands::status::run(&dirs, &db, project).await?,
         Commands::Log {
             project: _,

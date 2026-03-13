@@ -19,8 +19,15 @@ export const ProfileSchema = z.object({
   active_projects: z.array(z.object({ path: z.string(), name: z.string() })),
 })
 
+export const GlobalSkillsSchema = z.object({
+  skills: z.array(z.string()),
+  placed_skills: z.array(z.string()),
+  is_active: z.boolean(),
+})
+
 export const ProfilesResponseSchema = z.object({
   base: z.object({ skills: z.array(z.string()) }),
+  global: GlobalSkillsSchema,
   profiles: z.array(ProfileSchema),
 })
 
@@ -56,6 +63,7 @@ export const StatusSchema = z.object({
   placement_count: z.number(),
 })
 
+export type GlobalSkills = z.infer<typeof GlobalSkillsSchema>
 export type Skill = z.infer<typeof SkillSchema>
 export type Profile = z.infer<typeof ProfileSchema>
 export type ProfilesResponse = z.infer<typeof ProfilesResponseSchema>
