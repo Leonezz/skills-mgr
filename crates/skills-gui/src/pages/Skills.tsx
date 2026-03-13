@@ -37,18 +37,7 @@ import {
   AlertTriangle,
 } from "lucide-react"
 import type { Skill } from "@/lib/schemas"
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
-  return String(n)
-}
-
-function formatBytes(n: number): string {
-  if (n >= 1_048_576) return `${(n / 1_048_576).toFixed(1)} MB`
-  if (n >= 1_024) return `${(n / 1_024).toFixed(1)} KB`
-  return `${n} B`
-}
+import { formatTokens, formatBytes } from "@/lib/format"
 
 export function Skills() {
   const queryClient = useQueryClient()
@@ -688,7 +677,7 @@ export function Skills() {
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">Token Estimate</span>
-                <span>~{detail ? formatTokens(detail.token_estimate) : "0"} tokens</span>
+                <span>{detail ? `~${formatTokens(detail.token_estimate)} tokens` : "—"}</span>
               </div>
               {detail && detail.files.length > 0 && (
                 <div className="mt-2 max-h-32 overflow-y-auto rounded-md border border-border p-2">
