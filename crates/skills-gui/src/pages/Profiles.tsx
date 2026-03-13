@@ -61,8 +61,19 @@ export function Profiles() {
     return map
   }, [skills])
 
-  function profileTokenTotal(skillNames: string[]): number {
-    return skillNames.reduce((sum, name) => sum + (skillTokenMap.get(name) ?? 0), 0)
+  function resolveProfileTokenTotal(profile: { skills: string[]; includes: string[] }): number {
+    const direct = profile.skills.reduce(
+      (sum, name) => sum + (skillTokenMap.get(name) ?? 0),
+      0,
+    )
+    const inherited = profile.includes.reduce(
+      (sum, profName) => {
+        const included = profiles.find((p) => p.name === profName)
+        return sum + (included ? resolveProfileTokenTotal(included) : 0)
+      },
+      0,
+    )
+    return direct + inherited
   }
 
   const createMutation = useMutation({
@@ -424,7 +435,7 @@ export function Profiles() {
                 )}
                 <div className="flex items-center gap-4 text-xs text-muted-foreground">
                   <span>{globalInfo.skills.length} skill{globalInfo.skills.length !== 1 ? "s" : ""} configured</span>
-                  <span>~{formatTokens(profileTokenTotal(globalInfo.skills))} tokens</span>
+                  <span>~{formatTokens(resolveProfileTokenTotal({ skills: globalInfo.skills, includes: [] }))} tokens</span>
                   {globalInfo.placed_skills.length > 0 && (
                     <span className="text-emerald-600 dark:text-emerald-400">
                       {globalInfo.placed_skills.length} placed
@@ -522,7 +533,7 @@ export function Profiles() {
                     {/* Meta row */}
                     <div className="flex items-center gap-4 text-xs text-muted-foreground">
                       <span>{profile.skills.length} skill{profile.skills.length !== 1 ? "s" : ""}</span>
-                      <span>~{formatTokens(profileTokenTotal(profile.skills))} tokens</span>
+                      <span>~{formatTokens(resolveProfileTokenTotal(profile))} tokens</span>
                       {profile.includes.length > 0 && (
                         <span className="text-primary">
                           Includes: {profile.includes.join(", ")}

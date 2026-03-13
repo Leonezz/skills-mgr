@@ -13,12 +13,8 @@ jobs:
   check:
     name: Check & Test
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -40,14 +36,8 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
-      - name: Run formatter
-        run: cargo fmt --all
-
-      - name: Commit formatting fixes
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "style: auto-format Rust code"
-          file_pattern: "**/*.rs"
+      - name: Check formatting
+        run: cargo fmt --all -- --check
 
       - name: Clippy lints
         run: cargo clippy --workspace --all-targets -- -D warnings

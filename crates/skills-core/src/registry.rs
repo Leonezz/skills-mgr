@@ -359,22 +359,44 @@ pub fn compute_tree_hash(dir: &Path) -> Result<String> {
     Ok(tree_hash)
 }
 
+/// Known binary file extensions to exclude from token estimation.
+const BINARY_EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "gif", "svg", "ico", "webp", "bmp", "tar", "gz", "zip", "wasm", "bin",
+    "exe", "dll", "so", "dylib", "o", "a",
+];
+
+fn is_text_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| !BINARY_EXTENSIONS.contains(&e.to_lowercase().as_str()))
+        .unwrap_or(true)
+}
+
 /// List all files in a directory recursively, returning relative paths (sorted),
-/// total bytes, and estimated token count in a single traversal.
+/// total text bytes, and estimated token count in a single traversal.
 fn list_files_with_stats(dir: &Path) -> Result<(Vec<String>, u64, u64)> {
     let mut files = Vec::new();
     let mut total_bytes: u64 = 0;
-    list_files_inner(dir, dir, &mut files, &mut total_bytes)?;
+    list_files_inner(dir, dir, &mut files, Some(&mut total_bytes))?;
     files.sort();
-    // ~4 bytes per token is a reasonable approximation for mixed text/code
+    // ~4 bytes per token is a reasonable approximation for text/code
     Ok((files, total_bytes, total_bytes / 4))
+}
+
+/// List all files in a directory recursively, returning relative paths sorted.
+/// Used by compute_tree_hash which only needs file paths (skips metadata).
+fn list_files_recursive(dir: &Path) -> Result<Vec<String>> {
+    let mut files = Vec::new();
+    list_files_inner(dir, dir, &mut files, None)?;
+    files.sort();
+    Ok(files)
 }
 
 fn list_files_inner(
     base: &Path,
     current: &Path,
     files: &mut Vec<String>,
-    total_bytes: &mut u64,
+    mut total_bytes: Option<&mut u64>,
 ) -> Result<()> {
     if !current.exists() {
         return Ok(());
@@ -383,23 +405,23 @@ fn list_files_inner(
         let entry = entry?;
         let path = entry.path();
         if path.is_dir() {
-            list_files_inner(base, &path, files, total_bytes)?;
+            list_files_inner(base, &path, files, total_bytes.as_deref_mut())?;
         } else {
-            if let Ok(meta) = entry.metadata() {
-                *total_bytes += meta.len();
+            if let Some(bytes) = total_bytes.as_deref_mut() {
+                if is_text_file(&path) {
+                    match entry.metadata() {
+                        Ok(meta) => *bytes += meta.len(),
+                        Err(e) => {
+                            tracing::warn!("could not read metadata for {}: {}", path.display(), e)
+                        }
+                    }
+                }
             }
             let rel = path.strip_prefix(base)?.to_string_lossy().to_string();
             files.push(rel);
         }
     }
     Ok(())
-}
-
-/// List all files in a directory recursively, returning relative paths sorted.
-/// Used by compute_tree_hash which only needs file paths.
-fn list_files_recursive(dir: &Path) -> Result<Vec<String>> {
-    let (files, _, _) = list_files_with_stats(dir)?;
-    Ok(files)
 }
 
 /// Parse the description from SKILL.md YAML frontmatter.
