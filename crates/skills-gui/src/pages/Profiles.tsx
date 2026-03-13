@@ -61,15 +61,20 @@ export function Profiles() {
     return map
   }, [skills])
 
-  function resolveProfileTokenTotal(profile: { skills: string[]; includes: string[] }): number {
+  function resolveProfileTokenTotal(
+    profile: { skills: string[]; includes: string[] },
+    visited = new Set<string>(),
+  ): number {
     const direct = profile.skills.reduce(
       (sum, name) => sum + (skillTokenMap.get(name) ?? 0),
       0,
     )
     const inherited = profile.includes.reduce(
       (sum, profName) => {
+        if (visited.has(profName)) return sum
+        visited.add(profName)
         const included = profiles.find((p) => p.name === profName)
-        return sum + (included ? resolveProfileTokenTotal(included) : 0)
+        return sum + (included ? resolveProfileTokenTotal(included, visited) : 0)
       },
       0,
     )

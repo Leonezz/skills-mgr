@@ -407,13 +407,13 @@ fn list_files_inner(
         if path.is_dir() {
             list_files_inner(base, &path, files, total_bytes.as_deref_mut())?;
         } else {
-            if let Some(bytes) = total_bytes.as_deref_mut() {
-                if is_text_file(&path) {
-                    match entry.metadata() {
-                        Ok(meta) => *bytes += meta.len(),
-                        Err(e) => {
-                            tracing::warn!("could not read metadata for {}: {}", path.display(), e)
-                        }
+            if let Some(bytes) = total_bytes.as_deref_mut()
+                && is_text_file(&path)
+            {
+                match entry.metadata() {
+                    Ok(meta) => *bytes += meta.len(),
+                    Err(e) => {
+                        tracing::warn!("could not read metadata for {}: {}", path.display(), e)
                     }
                 }
             }
