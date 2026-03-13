@@ -62,9 +62,10 @@ export function Profiles() {
   }, [skills])
 
   function resolveProfileTokenTotal(
-    profile: { skills: string[]; includes: string[] },
+    profile: { name?: string; skills: string[]; includes: string[] },
     visited = new Set<string>(),
   ): number {
+    if (profile.name) visited.add(profile.name)
     const direct = profile.skills.reduce(
       (sum, name) => sum + (skillTokenMap.get(name) ?? 0),
       0,

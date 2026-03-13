@@ -372,7 +372,7 @@ fn run_budget(dirs: &AppDirs, profile: Option<String>, _project: Option<String>)
         match registry.get(skill_name)? {
             Some(skill) => {
                 println!(
-                    "  {} — {} files, {} bytes (~{} tokens)",
+                    "  {} — {} files, {} text bytes (~{} tokens)",
                     skill.name,
                     skill.files.len(),
                     skill.total_bytes,
@@ -387,7 +387,7 @@ fn run_budget(dirs: &AppDirs, profile: Option<String>, _project: Option<String>)
     }
 
     println!(
-        "\nTotal: {} skills, {} files, {} bytes (~{} tokens)",
+        "\nTotal: {} skills, {} files, {} text bytes (~{} tokens)",
         skill_names.len(),
         total_files,
         total_bytes,

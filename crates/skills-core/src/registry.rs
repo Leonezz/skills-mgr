@@ -361,8 +361,12 @@ pub fn compute_tree_hash(dir: &Path) -> Result<String> {
 
 /// Known binary file extensions to exclude from token estimation.
 const BINARY_EXTENSIONS: &[&str] = &[
-    "png", "jpg", "jpeg", "gif", "svg", "ico", "webp", "bmp", "tar", "gz", "zip", "wasm", "bin",
-    "exe", "dll", "so", "dylib", "o", "a",
+    // images
+    "png", "jpg", "jpeg", "gif", "svg", "ico", "webp", "bmp", // archives / compiled
+    "tar", "gz", "zip", "wasm", "bin", "exe", "dll", "so", "dylib", "o", "a", // fonts
+    "ttf", "otf", "woff", "woff2", "eot", // media
+    "mp3", "mp4", "mov", "avi", "mkv", "webm", "flac", "wav", // documents / databases
+    "pdf", "db", "sqlite", "sqlite3",
 ];
 
 fn is_text_file(path: &Path) -> bool {
