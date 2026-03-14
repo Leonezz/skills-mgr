@@ -81,6 +81,9 @@ export function Skills() {
   const [delegateProfileDesc, setDelegateProfileDesc] = useState("")
   const [delegateExistingProfile, setDelegateExistingProfile] = useState("")
 
+  // Discovered skill detail
+  const [discoverDetail, setDiscoverDetail] = useState<DiscoveredSkill | null>(null)
+
   // Link remote state
   const [showLinkRemote, setShowLinkRemote] = useState(false)
   const [linkUrl, setLinkUrl] = useState("")
@@ -872,6 +875,102 @@ export function Skills() {
         </SheetContent>
       </Sheet>
 
+      {/* Discovered Skill Detail Sheet */}
+      <Sheet open={discoverDetail !== null} onOpenChange={(o) => { if (!o) setDiscoverDetail(null) }}>
+        <SheetContent>
+          <SheetHeader onClose={() => setDiscoverDetail(null)}>
+            <h3 className="text-lg font-semibold">{discoverDetail?.name}</h3>
+          </SheetHeader>
+          <SheetBody className="space-y-5">
+            {/* Tags */}
+            <div className="flex flex-wrap gap-2">
+              <Badge variant="outline">{discoverDetail?.agent_name}</Badge>
+              <Badge variant="secondary">
+                {discoverDetail?.scope === "global" ? "Global" : "Project"}
+              </Badge>
+              {discoverDetail?.exists_in_registry && (
+                <Badge variant="secondary" className="text-amber-600">Already in registry</Badge>
+              )}
+            </div>
+
+            <hr className="border-border" />
+
+            {/* Description */}
+            <div className="space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Description
+              </p>
+              <p className="text-sm leading-relaxed">
+                {discoverDetail?.description ?? "No description"}
+              </p>
+            </div>
+
+            <hr className="border-border" />
+
+            {/* Details */}
+            <div className="space-y-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Details
+              </p>
+              <div className="space-y-1 text-sm">
+                <span className="text-muted-foreground">Found at</span>
+                <p className="break-all text-xs font-mono text-muted-foreground">
+                  {discoverDetail?.found_path}
+                </p>
+              </div>
+              {discoverDetail?.scope !== "global" && (
+                <div className="space-y-1 text-sm">
+                  <span className="text-muted-foreground">Project</span>
+                  <p className="break-all text-xs font-mono text-muted-foreground">
+                    {discoverDetail?.scope}
+                  </p>
+                </div>
+              )}
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Files</span>
+                <span>{discoverDetail?.files.length ?? 0} files</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Size</span>
+                <span>{discoverDetail ? formatBytes(discoverDetail.total_bytes) : "—"}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Token Estimate</span>
+                <span>{discoverDetail ? `~${formatTokens(discoverDetail.token_estimate)} tokens` : "—"}</span>
+              </div>
+              {discoverDetail && discoverDetail.files.length > 0 && (
+                <div className="mt-2 max-h-32 overflow-y-auto rounded-md border border-border p-2">
+                  {discoverDetail.files.map((f) => (
+                    <p
+                      key={f}
+                      className="truncate font-mono text-xs text-muted-foreground"
+                    >
+                      {f}
+                    </p>
+                  ))}
+                </div>
+              )}
+            </div>
+          </SheetBody>
+          <SheetFooter>
+            <Button
+              className="flex-1"
+              disabled={!discoverDetail || discoverDetail.exists_in_registry}
+              onClick={() => {
+                if (discoverDetail) {
+                  delegateSelected.add(discoverDetail.found_path)
+                  setDelegateSelected(new Set(delegateSelected))
+                  setShowDelegate(true)
+                  setDiscoverDetail(null)
+                }
+              }}
+            >
+              Delegate to Profile
+            </Button>
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
+
       {/* Skill Cards Grid — scrollable */}
       <div className="flex-1 min-h-0 overflow-y-auto">
         {tab === "registry" && (
@@ -950,6 +1049,7 @@ export function Skills() {
                     return new Set([...prev, ...paths])
                   })
                 }}
+                onDetail={(skill) => setDiscoverDetail(skill)}
               />
             )}
 
@@ -1134,6 +1234,8 @@ interface SkillCardProps {
   onToggle?: () => void
   exists_in_registry?: boolean
   agent_name?: string
+  /** Secondary action — opens detail view (used in discover mode) */
+  onDetail?: () => void
 }
 
 function SkillCard({
@@ -1148,6 +1250,7 @@ function SkillCard({
   onToggle,
   exists_in_registry,
   agent_name,
+  onDetail,
 }: SkillCardProps) {
   const isDiscover = onToggle !== undefined
 
@@ -1193,11 +1296,12 @@ function SkillCard({
                   <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" />
                 )}
               </div>
-              {!isDiscover && (
+              {(onClick || onDetail) && (
                 <button
                   onClick={(e) => {
                     e.stopPropagation()
-                    onClick?.()
+                    if (onDetail) onDetail()
+                    else onClick?.()
                   }}
                   className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100"
                 >
@@ -1266,9 +1370,10 @@ interface DiscoverResultsProps {
   selected: Set<string>
   onToggle: (path: string) => void
   onToggleAll: (paths: string[]) => void
+  onDetail: (skill: DiscoveredSkill) => void
 }
 
-function DiscoverResults({ discovered, selected, onToggle, onToggleAll }: DiscoverResultsProps) {
+function DiscoverResults({ discovered, selected, onToggle, onToggleAll, onDetail }: DiscoverResultsProps) {
   const grouped = useMemo(() => {
     const map = new Map<string, DiscoveredSkill[]>()
     for (const s of discovered) {
@@ -1309,6 +1414,7 @@ function DiscoverResults({ discovered, selected, onToggle, onToggleAll }: Discov
                   exists_in_registry={skill.exists_in_registry}
                   selected={selected.has(skill.found_path)}
                   onToggle={() => onToggle(skill.found_path)}
+                  onDetail={() => onDetail(skill)}
                 />
               ))}
             </div>

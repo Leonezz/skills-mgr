@@ -38,7 +38,7 @@ const SheetContent = React.forwardRef<
   <div
     ref={ref}
     className={cn(
-      "fixed inset-y-0 right-0 z-50 flex w-[400px] flex-col border-l border-border bg-card shadow-xl",
+      "fixed inset-y-0 right-0 z-50 flex w-[540px] flex-col border-l border-border bg-card shadow-xl",
       "animate-sheet-in",
       className
     )}
