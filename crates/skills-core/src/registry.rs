@@ -133,6 +133,7 @@ impl Registry {
                         .format("%Y-%m-%dT%H:%M:%S%.3fZ")
                         .to_string(),
                 ),
+                original_agent_path: None,
             },
         );
         sources.save(&self.dirs.sources_toml())?;
@@ -213,6 +214,7 @@ impl Registry {
                         .format("%Y-%m-%dT%H:%M:%S%.3fZ")
                         .to_string(),
                 ),
+                original_agent_path: None,
             },
         );
         sources.save(&self.dirs.sources_toml())?;
@@ -264,6 +266,7 @@ impl Registry {
                         .format("%Y-%m-%dT%H:%M:%S%.3fZ")
                         .to_string(),
                 ),
+                original_agent_path: None,
             },
         );
         sources.save(&self.dirs.sources_toml())?;
@@ -331,6 +334,7 @@ impl Registry {
                         .format("%Y-%m-%dT%H:%M:%S%.3fZ")
                         .to_string(),
                 ),
+                original_agent_path: None,
             },
         );
         sources.save(&self.dirs.sources_toml())?;
