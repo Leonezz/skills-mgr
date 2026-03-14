@@ -153,6 +153,7 @@ pub fn scan_all_agents(
 }
 
 /// Parse description from a SKILL.md frontmatter.
+/// Handles both inline values and YAML multiline scalars (> and |).
 fn parse_skill_description(skill_md: &Path) -> Option<String> {
     let content = std::fs::read_to_string(skill_md).ok()?;
     let content = content.trim();
@@ -161,10 +162,33 @@ fn parse_skill_description(skill_md: &Path) -> Option<String> {
     }
     let end = content[3..].find("---")?;
     let frontmatter = &content[3..3 + end];
-    for line in frontmatter.lines() {
-        let line = line.trim();
-        if let Some(desc) = line.strip_prefix("description:") {
-            return Some(desc.trim().trim_matches('"').trim_matches('\'').to_string());
+    let lines: Vec<&str> = frontmatter.lines().collect();
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if let Some(value) = trimmed.strip_prefix("description:") {
+            let value = value.trim().trim_matches('"').trim_matches('\'');
+            if value == ">" || value == "|" {
+                // YAML multiline scalar — collect indented continuation lines
+                let mut parts = Vec::new();
+                for cont in &lines[i + 1..] {
+                    if cont.starts_with(' ') || cont.starts_with('\t') {
+                        parts.push(cont.trim());
+                    } else {
+                        break;
+                    }
+                }
+                let joined = parts.join(" ");
+                return if joined.is_empty() {
+                    None
+                } else {
+                    Some(joined)
+                };
+            }
+            return if value.is_empty() {
+                None
+            } else {
+                Some(value.to_string())
+            };
         }
     }
     None
@@ -341,5 +365,36 @@ mod tests {
         assert_eq!(results[0].name, "my-skill");
         assert_eq!(results[0].agent_name, "claude");
         assert_eq!(results[0].scope, DiscoveryScope::Global);
+    }
+
+    #[test]
+    fn test_parse_yaml_multiline_description() {
+        let tmp = TempDir::new().unwrap();
+        let skill_md = tmp.path().join("SKILL.md");
+        std::fs::write(
+            &skill_md,
+            "---\nname: test\ndescription: >\n  Creates Python projects\n  with proper structure.\n---\n",
+        )
+        .unwrap();
+
+        let desc = parse_skill_description(&skill_md);
+        assert_eq!(
+            desc,
+            Some("Creates Python projects with proper structure.".into())
+        );
+    }
+
+    #[test]
+    fn test_parse_inline_description() {
+        let tmp = TempDir::new().unwrap();
+        let skill_md = tmp.path().join("SKILL.md");
+        std::fs::write(
+            &skill_md,
+            "---\nname: test\ndescription: Inline desc\n---\n",
+        )
+        .unwrap();
+
+        let desc = parse_skill_description(&skill_md);
+        assert_eq!(desc, Some("Inline desc".into()));
     }
 }
