@@ -65,7 +65,20 @@ export const StatusSchema = z.object({
   placement_count: z.number(),
 })
 
+export const DiscoveredSkillSchema = z.object({
+  name: z.string(),
+  description: z.string().nullable(),
+  agent_name: z.string(),
+  found_path: z.string(),
+  scope: z.string(),
+  files: z.array(z.string()),
+  total_bytes: z.number(),
+  token_estimate: z.number(),
+  exists_in_registry: z.boolean(),
+})
+
 export type GlobalSkills = z.infer<typeof GlobalSkillsSchema>
+export type DiscoveredSkill = z.infer<typeof DiscoveredSkillSchema>
 export type Skill = z.infer<typeof SkillSchema>
 export type Profile = z.infer<typeof ProfileSchema>
 export type ProfilesResponse = z.infer<typeof ProfilesResponseSchema>

@@ -30,6 +30,7 @@ export function Settings() {
         mcp_transport: "stdio",
         git_sync_enabled: false,
         git_sync_repo_url: "",
+        scan_auto_on_startup: false,
       })
     })
   }, [])
