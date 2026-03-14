@@ -354,7 +354,10 @@ async fn run_doctor(dirs: &AppDirs, _db: &Database) -> Result<()> {
     Ok(())
 }
 
-fn run_budget(dirs: &AppDirs, profile: Option<String>, _project: Option<String>) -> Result<()> {
+fn run_budget(dirs: &AppDirs, profile: Option<String>, project: Option<String>) -> Result<()> {
+    if project.is_some() {
+        eprintln!("warning: --project filter is not yet implemented, ignoring");
+    }
     let profiles_config = ProfilesConfig::load(&dirs.profiles_toml())?;
     let registry = Registry::new(dirs.clone());
 

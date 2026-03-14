@@ -359,6 +359,9 @@ pub fn compute_tree_hash(dir: &Path) -> Result<String> {
     Ok(tree_hash)
 }
 
+/// Rough approximation: one token ~ 4 bytes of UTF-8 text/code.
+const BYTES_PER_TOKEN: u64 = 4;
+
 /// Known binary file extensions to exclude from token estimation.
 const BINARY_EXTENSIONS: &[&str] = &[
     // images
@@ -373,7 +376,7 @@ const BINARY_EXTENSIONS: &[&str] = &[
 fn is_text_file(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
-        .map(|e| !BINARY_EXTENSIONS.contains(&e.to_lowercase().as_str()))
+        .map(|e| !BINARY_EXTENSIONS.iter().any(|&b| b.eq_ignore_ascii_case(e)))
         .unwrap_or(true)
 }
 
@@ -384,8 +387,6 @@ fn list_files_with_stats(dir: &Path) -> Result<(Vec<String>, u64, u64)> {
     let mut total_bytes: u64 = 0;
     list_files_inner(dir, dir, &mut files, Some(&mut total_bytes))?;
     files.sort();
-    /// Rough approximation: one token ~ 4 bytes of UTF-8 text/code.
-    const BYTES_PER_TOKEN: u64 = 4;
     Ok((files, total_bytes, total_bytes / BYTES_PER_TOKEN))
 }
 

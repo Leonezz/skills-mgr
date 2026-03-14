@@ -61,25 +61,47 @@ export function Profiles() {
     return map
   }, [skills])
 
+  const profileTokenTotals = useMemo(() => {
+    const totals = new Map<string, number>()
+
+    function resolve(
+      profile: { name?: string; skills: string[]; includes: string[] },
+      visited: Set<string>,
+    ): number {
+      if (profile.name) visited.add(profile.name)
+      const direct = profile.skills.reduce(
+        (sum, name) => sum + (skillTokenMap.get(name) ?? 0),
+        0,
+      )
+      const inherited = profile.includes.reduce(
+        (sum, profName) => {
+          if (visited.has(profName)) return sum
+          visited.add(profName)
+          const included = profiles.find((p) => p.name === profName)
+          return sum + (included ? resolve(included, visited) : 0)
+        },
+        0,
+      )
+      return direct + inherited
+    }
+
+    for (const p of profiles) {
+      totals.set(p.name, resolve(p, new Set<string>()))
+    }
+    return totals
+  }, [profiles, skillTokenMap])
+
   function resolveProfileTokenTotal(
     profile: { name?: string; skills: string[]; includes: string[] },
-    visited = new Set<string>(),
   ): number {
-    if (profile.name) visited.add(profile.name)
-    const direct = profile.skills.reduce(
+    if (profile.name && profileTokenTotals.has(profile.name)) {
+      return profileTokenTotals.get(profile.name)!
+    }
+    // Fallback for ad-hoc profiles (e.g. global skills)
+    return profile.skills.reduce(
       (sum, name) => sum + (skillTokenMap.get(name) ?? 0),
       0,
     )
-    const inherited = profile.includes.reduce(
-      (sum, profName) => {
-        if (visited.has(profName)) return sum
-        visited.add(profName)
-        const included = profiles.find((p) => p.name === profName)
-        return sum + (included ? resolveProfileTokenTotal(included, visited) : 0)
-      },
-      0,
-    )
-    return direct + inherited
   }
 
   const createMutation = useMutation({
