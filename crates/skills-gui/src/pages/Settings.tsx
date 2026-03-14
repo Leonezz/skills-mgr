@@ -236,6 +236,24 @@ export function Settings() {
         </div>
       </section>
 
+      {/* Skill Discovery */}
+      <section className="space-y-4 rounded-xl border border-border bg-card p-6">
+        <h3 className="text-base font-semibold">Skill Discovery</h3>
+        <div className="flex items-center justify-between">
+          <div className="space-y-0.5">
+            <span className="text-sm font-medium">Auto-scan on Startup</span>
+            <p className="text-xs text-muted-foreground">
+              Automatically scan agent paths for unmanaged skills when the app starts
+            </p>
+          </div>
+          <Switch
+            checked={settings?.scan_auto_on_startup ?? false}
+            onCheckedChange={(checked) => update({ scan_auto_on_startup: checked })}
+            disabled={!settings || saving}
+          />
+        </div>
+      </section>
+
       {/* About & Updates */}
       <section className="space-y-4 rounded-xl border border-border bg-card p-6">
         <h3 className="text-base font-semibold">About</h3>
