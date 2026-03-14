@@ -317,14 +317,6 @@ export function Skills() {
     if (selected) setNewSourcePath(selected as string)
   }
 
-  function fileExtensions(files: string[]): string[] {
-    const exts = new Set<string>()
-    for (const f of files) {
-      const dot = f.lastIndexOf(".")
-      if (dot > 0) exts.add(f.slice(dot))
-    }
-    return [...exts].sort()
-  }
 
   function formatSourceDisplay(skill: Skill): string {
     if (!skill.source_type) return "Local file"
@@ -888,74 +880,17 @@ export function Skills() {
               <p className="text-muted-foreground">Loading...</p>
             ) : filteredSkills.length > 0 ? (
               <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 pb-4">
-                {filteredSkills.map((skill: Skill, index: number) => (
-                  <Card
+                {filteredSkills.map((skill: Skill) => (
+                  <SkillCard
                     key={skill.name}
-                    className="animate-list-item group cursor-pointer transition-colors hover:border-primary/30"
-                    style={{ animationDelay: `${index * 40}ms` }}
+                    name={skill.name}
+                    description={skill.description}
+                    files={skill.files}
+                    token_estimate={skill.token_estimate}
+                    source_type={skill.source_type}
+                    is_builtin={skill.is_builtin}
                     onClick={() => setDetail(skill)}
-                  >
-                    <CardContent className="p-5">
-                      <div className="flex items-start gap-3.5">
-                        {/* Icon */}
-                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10">
-                          <FileCode className="h-[18px] w-[18px] text-primary" />
-                        </div>
-
-                        {/* Content */}
-                        <div className="flex-1 min-w-0 space-y-2">
-                          {/* Name + overflow */}
-                          <div className="flex items-center justify-between">
-                            <span className="text-[15px] font-semibold truncate">
-                              {skill.name}
-                            </span>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                setDetail(skill)
-                              }}
-                              className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100"
-                            >
-                              <MoreVertical className="h-4 w-4" />
-                            </button>
-                          </div>
-
-                          {/* Description */}
-                          <p className="line-clamp-2 text-[13px] leading-relaxed text-muted-foreground">
-                            {skill.description ?? "No description"}
-                          </p>
-
-                          {/* Tags + file info row */}
-                          <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
-                            {skill.is_builtin && (
-                              <Badge variant="secondary" className="text-[10px]">
-                                Built-in
-                              </Badge>
-                            )}
-                            {skill.source_type && (
-                              <Badge variant="accent" className="text-[10px]">
-                                {skill.source_type}
-                              </Badge>
-                            )}
-                            <span className="text-[11px] text-muted-foreground">
-                              {skill.files.length} file{skill.files.length !== 1 ? "s" : ""}
-                            </span>
-                            <span className="text-[11px] text-muted-foreground">
-                              ~{formatTokens(skill.token_estimate)} tokens
-                            </span>
-                            {fileExtensions(skill.files).map((ext) => (
-                              <span
-                                key={ext}
-                                className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
-                              >
-                                {ext}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
+                  />
                 ))}
               </div>
             ) : skills && skills.length > 0 ? (
@@ -1173,6 +1108,156 @@ export function Skills() {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Shared SkillCard component                                        */
+/* ------------------------------------------------------------------ */
+
+function fileExts(files: string[]): string[] {
+  const exts = new Set<string>()
+  for (const f of files) {
+    const dot = f.lastIndexOf(".")
+    if (dot > 0) exts.add(f.slice(dot))
+  }
+  return [...exts].sort()
+}
+
+interface SkillCardProps {
+  name: string
+  description: string | null
+  files: string[]
+  token_estimate: number
+  /** Registry-mode props */
+  source_type?: string | null
+  is_builtin?: boolean
+  onClick?: () => void
+  /** Discover-mode props */
+  selected?: boolean
+  onToggle?: () => void
+  exists_in_registry?: boolean
+  agent_name?: string
+}
+
+function SkillCard({
+  name,
+  description,
+  files,
+  token_estimate,
+  source_type,
+  is_builtin,
+  onClick,
+  selected,
+  onToggle,
+  exists_in_registry,
+  agent_name,
+}: SkillCardProps) {
+  const isDiscover = onToggle !== undefined
+
+  const borderClass = isDiscover
+    ? selected
+      ? exists_in_registry
+        ? "border-amber-500 bg-amber-500/5"
+        : "border-primary bg-primary/5"
+      : "border-border hover:border-muted-foreground/30"
+    : "hover:border-primary/30"
+
+  return (
+    <Card
+      className={`animate-list-item group cursor-pointer transition-colors ${borderClass}`}
+      onClick={isDiscover ? onToggle : onClick}
+    >
+      <CardContent className="p-5">
+        <div className="flex items-start gap-3.5">
+          {/* Checkbox (discover) or icon (registry) */}
+          {isDiscover ? (
+            <div
+              className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border transition-colors ${
+                selected
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : "border-muted-foreground/30"
+              }`}
+            >
+              {selected && <Check className="h-3.5 w-3.5" />}
+            </div>
+          ) : (
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+              <FileCode className="h-[18px] w-[18px] text-primary" />
+            </div>
+          )}
+
+          {/* Content */}
+          <div className="flex-1 min-w-0 space-y-2">
+            {/* Name + overflow */}
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span className="text-[15px] font-semibold truncate">{name}</span>
+                {exists_in_registry && (
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+                )}
+              </div>
+              {!isDiscover && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onClick?.()
+                  }}
+                  className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100"
+                >
+                  <MoreVertical className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+
+            {/* Conflict warning */}
+            {exists_in_registry && (
+              <p className="text-[10px] font-medium text-amber-500 -mt-1">
+                Already in registry
+              </p>
+            )}
+
+            {/* Description */}
+            <p className="line-clamp-2 text-[13px] leading-relaxed text-muted-foreground">
+              {description ?? "No description"}
+            </p>
+
+            {/* Tags + file info row */}
+            <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+              {is_builtin && (
+                <Badge variant="secondary" className="text-[10px]">
+                  Built-in
+                </Badge>
+              )}
+              {source_type && (
+                <Badge variant="accent" className="text-[10px]">
+                  {source_type}
+                </Badge>
+              )}
+              {agent_name && (
+                <Badge variant="outline" className="text-[10px]">
+                  {agent_name}
+                </Badge>
+              )}
+              <span className="text-[11px] text-muted-foreground">
+                {files.length} file{files.length !== 1 ? "s" : ""}
+              </span>
+              <span className="text-[11px] text-muted-foreground">
+                ~{formatTokens(token_estimate)} tokens
+              </span>
+              {fileExts(files).map((ext) => (
+                <span
+                  key={ext}
+                  className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+                >
+                  {ext}
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+/* ------------------------------------------------------------------ */
 /*  DiscoverResults sub-component                                     */
 /* ------------------------------------------------------------------ */
 
@@ -1212,60 +1297,20 @@ function DiscoverResults({ discovered, selected, onToggle, onToggleAll }: Discov
                 {allSelected ? "Deselect All" : "Select All"}
               </button>
             </div>
-            <div className="grid grid-cols-2 gap-2">
-              {items.map((skill) => {
-                const isSelected = selected.has(skill.found_path)
-                return (
-                  <button
-                    key={skill.found_path}
-                    type="button"
-                    onClick={() => onToggle(skill.found_path)}
-                    className={`flex items-start gap-2.5 rounded-lg border p-3 text-left transition-colors ${
-                      isSelected
-                        ? skill.exists_in_registry
-                          ? "border-amber-500 bg-amber-500/5"
-                          : "border-primary bg-primary/5"
-                        : "border-border hover:border-muted-foreground/30"
-                    }`}
-                  >
-                    <div
-                      className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors ${
-                        isSelected
-                          ? "border-primary bg-primary text-primary-foreground"
-                          : "border-muted-foreground/30"
-                      }`}
-                    >
-                      {isSelected && <Check className="h-3 w-3" />}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-1.5">
-                        <p className="text-sm font-medium truncate">{skill.name}</p>
-                        {skill.exists_in_registry && (
-                          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" />
-                        )}
-                      </div>
-                      {skill.exists_in_registry && (
-                        <p className="text-[10px] font-medium text-amber-500 mt-0.5">
-                          Already in registry
-                        </p>
-                      )}
-                      {skill.description && (
-                        <p className="text-xs text-muted-foreground line-clamp-2 mt-0.5">
-                          {skill.description}
-                        </p>
-                      )}
-                      <div className="flex items-center gap-1.5 mt-1">
-                        <span className="text-[11px] text-muted-foreground">
-                          {skill.files.length} file{skill.files.length !== 1 ? "s" : ""}
-                        </span>
-                        <span className="text-[11px] text-muted-foreground">
-                          ~{formatTokens(skill.token_estimate)} tokens
-                        </span>
-                      </div>
-                    </div>
-                  </button>
-                )
-              })}
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              {items.map((skill) => (
+                <SkillCard
+                  key={skill.found_path}
+                  name={skill.name}
+                  description={skill.description}
+                  files={skill.files}
+                  token_estimate={skill.token_estimate}
+                  agent_name={skill.agent_name}
+                  exists_in_registry={skill.exists_in_registry}
+                  selected={selected.has(skill.found_path)}
+                  onToggle={() => onToggle(skill.found_path)}
+                />
+              ))}
             </div>
           </div>
         )
