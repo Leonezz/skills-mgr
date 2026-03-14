@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useState, useMemo } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -25,6 +25,7 @@ import {
 import { toast } from "sonner"
 import { Plus, MoreVertical, Layers, Globe } from "lucide-react"
 import type { Profile } from "@/lib/schemas"
+import { formatTokens } from "@/lib/format"
 
 export function Profiles() {
   const queryClient = useQueryClient()
@@ -50,6 +51,58 @@ export function Profiles() {
   const profiles = data?.profiles ?? []
   const skillSuggestions = skills?.map((s) => s.name) ?? []
   const profileSuggestions = profiles.map((p) => p.name)
+
+  // Build a lookup for skill token estimates
+  const skillTokenMap = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const s of skills ?? []) {
+      map.set(s.name, s.token_estimate)
+    }
+    return map
+  }, [skills])
+
+  const profileTokenTotals = useMemo(() => {
+    const totals = new Map<string, number>()
+
+    function resolve(
+      profile: { name?: string; skills: string[]; includes: string[] },
+      visited: Set<string>,
+    ): number {
+      if (profile.name) visited.add(profile.name)
+      const direct = profile.skills.reduce(
+        (sum, name) => sum + (skillTokenMap.get(name) ?? 0),
+        0,
+      )
+      const inherited = profile.includes.reduce(
+        (sum, profName) => {
+          if (visited.has(profName)) return sum
+          visited.add(profName)
+          const included = profiles.find((p) => p.name === profName)
+          return sum + (included ? resolve(included, visited) : 0)
+        },
+        0,
+      )
+      return direct + inherited
+    }
+
+    for (const p of profiles) {
+      totals.set(p.name, resolve(p, new Set<string>()))
+    }
+    return totals
+  }, [profiles, skillTokenMap])
+
+  function resolveProfileTokenTotal(
+    profile: { name?: string; skills: string[]; includes: string[] },
+  ): number {
+    if (profile.name && profileTokenTotals.has(profile.name)) {
+      return profileTokenTotals.get(profile.name)!
+    }
+    // Fallback for ad-hoc profiles (e.g. global skills)
+    return profile.skills.reduce(
+      (sum, name) => sum + (skillTokenMap.get(name) ?? 0),
+      0,
+    )
+  }
 
   const createMutation = useMutation({
     mutationFn: () => createProfile(newName, newSkills, newIncludes, newDesc || undefined),
@@ -410,6 +463,7 @@ export function Profiles() {
                 )}
                 <div className="flex items-center gap-4 text-xs text-muted-foreground">
                   <span>{globalInfo.skills.length} skill{globalInfo.skills.length !== 1 ? "s" : ""} configured</span>
+                  <span>~{formatTokens(resolveProfileTokenTotal({ skills: globalInfo.skills, includes: [] }))} tokens</span>
                   {globalInfo.placed_skills.length > 0 && (
                     <span className="text-emerald-600 dark:text-emerald-400">
                       {globalInfo.placed_skills.length} placed
@@ -507,6 +561,7 @@ export function Profiles() {
                     {/* Meta row */}
                     <div className="flex items-center gap-4 text-xs text-muted-foreground">
                       <span>{profile.skills.length} skill{profile.skills.length !== 1 ? "s" : ""}</span>
+                      <span>~{formatTokens(resolveProfileTokenTotal(profile))} tokens</span>
                       {profile.includes.length > 0 && (
                         <span className="text-primary">
                           Includes: {profile.includes.join(", ")}

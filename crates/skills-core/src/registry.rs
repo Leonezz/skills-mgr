@@ -13,6 +13,8 @@ pub struct SkillMeta {
     pub dir_path: PathBuf,
     pub files: Vec<String>,
     pub source: Option<SkillSource>,
+    pub total_bytes: u64,
+    pub token_estimate: u64,
 }
 
 /// Manages the skill registry directory.
@@ -48,7 +50,7 @@ impl Registry {
 
             let name = entry.file_name().to_string_lossy().to_string();
             let description = parse_description(&skill_md).ok();
-            let files = list_files_recursive(&skill_dir)?;
+            let (files, total_bytes, token_estimate) = list_files_with_stats(&skill_dir)?;
             let source = sources.skills.get(&name).cloned();
 
             skills.push(SkillMeta {
@@ -57,6 +59,8 @@ impl Registry {
                 dir_path: skill_dir,
                 files,
                 source,
+                total_bytes,
+                token_estimate,
             });
         }
 
@@ -74,7 +78,7 @@ impl Registry {
 
         let sources = SourcesConfig::load(&self.dirs.sources_toml()).unwrap_or_default();
         let description = parse_description(&skill_md).ok();
-        let files = list_files_recursive(&skill_dir)?;
+        let (files, total_bytes, token_estimate) = list_files_with_stats(&skill_dir)?;
         let source = sources.skills.get(name).cloned();
 
         Ok(Some(SkillMeta {
@@ -83,6 +87,8 @@ impl Registry {
             dir_path: skill_dir,
             files,
             source,
+            total_bytes,
+            token_estimate,
         }))
     }
 
@@ -353,15 +359,52 @@ pub fn compute_tree_hash(dir: &Path) -> Result<String> {
     Ok(tree_hash)
 }
 
+/// Rough approximation: one token ~ 4 bytes of UTF-8 text/code.
+const BYTES_PER_TOKEN: u64 = 4;
+
+/// Known binary file extensions to exclude from token estimation.
+const BINARY_EXTENSIONS: &[&str] = &[
+    // images
+    "png", "jpg", "jpeg", "gif", "svg", "ico", "webp", "bmp", // archives / compiled
+    "tar", "gz", "zip", "wasm", "bin", "exe", "dll", "so", "dylib", "o", "a", // fonts
+    "ttf", "otf", "woff", "woff2", "eot", // media
+    "mp3", "mp4", "mov", "avi", "mkv", "webm", "flac", "wav", // documents / databases
+    "pdf", "db", "sqlite", "sqlite3", // generated lockfiles
+    "lock",
+];
+
+fn is_text_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| !BINARY_EXTENSIONS.iter().any(|&b| b.eq_ignore_ascii_case(e)))
+        .unwrap_or(true)
+}
+
+/// List all files in a directory recursively, returning relative paths (sorted),
+/// total text bytes, and estimated token count in a single traversal.
+fn list_files_with_stats(dir: &Path) -> Result<(Vec<String>, u64, u64)> {
+    let mut files = Vec::new();
+    let mut total_bytes: u64 = 0;
+    list_files_inner(dir, dir, &mut files, Some(&mut total_bytes))?;
+    files.sort();
+    Ok((files, total_bytes, total_bytes / BYTES_PER_TOKEN))
+}
+
 /// List all files in a directory recursively, returning relative paths sorted.
+/// Used by compute_tree_hash which only needs file paths (skips metadata).
 fn list_files_recursive(dir: &Path) -> Result<Vec<String>> {
     let mut files = Vec::new();
-    list_files_inner(dir, dir, &mut files)?;
+    list_files_inner(dir, dir, &mut files, None)?;
     files.sort();
     Ok(files)
 }
 
-fn list_files_inner(base: &Path, current: &Path, files: &mut Vec<String>) -> Result<()> {
+fn list_files_inner(
+    base: &Path,
+    current: &Path,
+    files: &mut Vec<String>,
+    mut total_bytes: Option<&mut u64>,
+) -> Result<()> {
     if !current.exists() {
         return Ok(());
     }
@@ -369,8 +412,18 @@ fn list_files_inner(base: &Path, current: &Path, files: &mut Vec<String>) -> Res
         let entry = entry?;
         let path = entry.path();
         if path.is_dir() {
-            list_files_inner(base, &path, files)?;
+            list_files_inner(base, &path, files, total_bytes.as_deref_mut())?;
         } else {
+            if let Some(bytes) = total_bytes.as_deref_mut()
+                && is_text_file(&path)
+            {
+                match entry.metadata() {
+                    Ok(meta) => *bytes += meta.len(),
+                    Err(e) => {
+                        tracing::warn!("could not read metadata for {}: {}", path.display(), e)
+                    }
+                }
+            }
             let rel = path.strip_prefix(base)?.to_string_lossy().to_string();
             files.push(rel);
         }

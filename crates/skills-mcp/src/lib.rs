@@ -298,6 +298,8 @@ impl SkillsMcpServer {
                             "name": s.name,
                             "description": s.description,
                             "files": s.files,
+                            "total_bytes": s.total_bytes,
+                            "token_estimate": s.token_estimate,
                         })
                     })
                     .collect();
