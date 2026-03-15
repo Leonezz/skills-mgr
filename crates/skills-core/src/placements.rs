@@ -262,7 +262,7 @@ pub struct GlobalStatus {
     pub is_active: bool,
 }
 
-fn expand_tilde(path: &str) -> String {
+pub fn expand_tilde(path: &str) -> String {
     if let (Some(rest), Some(home)) = (path.strip_prefix("~/"), dirs::home_dir()) {
         return format!("{}/{}", home.display(), rest);
     }

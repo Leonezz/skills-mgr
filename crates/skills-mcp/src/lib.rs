@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use skills_core::config::{AgentDef, AgentsConfig, ProfileDef, ProfilesConfig};
@@ -281,6 +281,41 @@ impl SkillsMcpServer {
                         "project_path": { "type": "string" }
                     },
                     "required": ["project_path"]
+                }
+            },
+            {
+                "name": "discover_skills",
+                "description": "Scan agent paths for unmanaged skills not in the registry",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "global_only": { "type": "boolean", "description": "If true, only scan global agent paths" }
+                    }
+                }
+            },
+            {
+                "name": "link_remote",
+                "description": "Link a local skill to a remote git repository",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string", "description": "Skill name" },
+                        "url": { "type": "string", "description": "Remote git URL" },
+                        "subpath": { "type": "string", "description": "Subpath within the repo" },
+                        "git_ref": { "type": "string", "description": "Git ref (default: main)" }
+                    },
+                    "required": ["name", "url"]
+                }
+            },
+            {
+                "name": "unlink_remote",
+                "description": "Unlink a skill from its remote repository",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string", "description": "Skill name" }
+                    },
+                    "required": ["name"]
                 }
             }
         ])
@@ -612,6 +647,75 @@ impl SkillsMcpServer {
                     "active_profiles": s.active_profiles,
                     "placement_count": s.placement_count,
                 }))?)
+            }
+            "discover_skills" => {
+                let params = args;
+                let global_only = params
+                    .get("global_only")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let registry = Registry::new(self.dirs.clone());
+                let agents_config = AgentsConfig::load(&self.dirs.agents_toml())?;
+                let project_paths = if global_only {
+                    vec![]
+                } else {
+                    self.db
+                        .list_all_projects()
+                        .await?
+                        .into_iter()
+                        .filter(|p| p.path != skills_core::placements::GLOBAL_PROJECT_PATH)
+                        .map(|p| p.path)
+                        .collect()
+                };
+                let discovered = skills_core::discovery::scan_all_agents(
+                    &self.dirs,
+                    &registry,
+                    &agents_config,
+                    &project_paths,
+                )?;
+                let result: Vec<serde_json::Value> = discovered
+                    .iter()
+                    .map(|d| {
+                        serde_json::json!({
+                            "name": d.name,
+                            "description": d.description,
+                            "agent_name": d.agent_name,
+                            "found_path": d.found_path.to_string_lossy(),
+                            "scope": match &d.scope {
+                                skills_core::discovery::DiscoveryScope::Global => "global".to_string(),
+                                skills_core::discovery::DiscoveryScope::Project(p) => p.clone(),
+                            },
+                            "files": d.files,
+                            "total_bytes": d.total_bytes,
+                            "token_estimate": d.token_estimate,
+                            "exists_in_registry": d.exists_in_registry,
+                        })
+                    })
+                    .collect();
+                Ok(serde_json::to_string_pretty(&result)?)
+            }
+            "link_remote" => {
+                let params = args;
+                let name = params["name"].as_str().context("name required")?;
+                let url = params["url"].as_str().context("url required")?;
+                let subpath = params.get("subpath").and_then(|v| v.as_str());
+                let git_ref = params
+                    .get("git_ref")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("main");
+                let registry = Registry::new(self.dirs.clone());
+                registry.link_remote(name, url, subpath, git_ref)?;
+                Ok(format!(
+                    "Linked '{}' to remote: {} (ref: {})",
+                    name, url, git_ref
+                ))
+            }
+            "unlink_remote" => {
+                let params = args;
+                let name = params["name"].as_str().context("name required")?;
+                let registry = Registry::new(self.dirs.clone());
+                registry.unlink_remote(name)?;
+                Ok(format!("Unlinked '{}' from remote", name))
             }
             _ => anyhow::bail!("Unknown tool: {}", name),
         }

@@ -38,7 +38,7 @@ const SheetContent = React.forwardRef<
   <div
     ref={ref}
     className={cn(
-      "fixed inset-y-0 right-0 z-50 flex w-[400px] flex-col border-l border-border bg-card shadow-xl",
+      "fixed inset-y-0 right-0 z-50 flex w-[540px] flex-col border-l border-border bg-card shadow-xl",
       "animate-sheet-in",
       className
     )}
@@ -90,7 +90,7 @@ const SheetFooter = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <div
     ref={ref}
-    className={cn("flex gap-3 p-6 pt-0", className)}
+    className={cn("flex flex-wrap gap-3 p-6 pt-0", className)}
     {...props}
   />
 ))

@@ -19,7 +19,7 @@ pub struct SkillMeta {
 
 /// Manages the skill registry directory.
 pub struct Registry {
-    dirs: AppDirs,
+    pub(crate) dirs: AppDirs,
 }
 
 impl Registry {
@@ -133,6 +133,7 @@ impl Registry {
                         .format("%Y-%m-%dT%H:%M:%S%.3fZ")
                         .to_string(),
                 ),
+                original_agent_path: None,
             },
         );
         sources.save(&self.dirs.sources_toml())?;
@@ -213,6 +214,7 @@ impl Registry {
                         .format("%Y-%m-%dT%H:%M:%S%.3fZ")
                         .to_string(),
                 ),
+                original_agent_path: None,
             },
         );
         sources.save(&self.dirs.sources_toml())?;
@@ -264,6 +266,7 @@ impl Registry {
                         .format("%Y-%m-%dT%H:%M:%S%.3fZ")
                         .to_string(),
                 ),
+                original_agent_path: None,
             },
         );
         sources.save(&self.dirs.sources_toml())?;
@@ -331,11 +334,113 @@ impl Registry {
                         .format("%Y-%m-%dT%H:%M:%S%.3fZ")
                         .to_string(),
                 ),
+                original_agent_path: None,
             },
         );
         sources.save(&self.dirs.sources_toml())?;
 
         Ok(skill_name)
+    }
+
+    /// Import a discovered skill into the registry (delegation).
+    ///
+    /// Copies the skill directory into the registry and records the original
+    /// agent path in sources.toml for tracking.
+    pub fn delegate(&self, source_dir: &Path, original_path: &str) -> Result<String> {
+        let skill_md = source_dir.join("SKILL.md");
+        if !skill_md.exists() {
+            bail!("No SKILL.md found at {}", source_dir.display());
+        }
+
+        let name = source_dir
+            .file_name()
+            .context("Invalid source path")?
+            .to_string_lossy()
+            .to_string();
+
+        let dest = self.dirs.registry().join(&name);
+        if dest.exists() {
+            bail!("Skill '{}' already exists in registry", name);
+        }
+
+        copy_dir_recursive(source_dir, &dest)?;
+
+        let hash = compute_tree_hash(&dest)?;
+        let mut sources = SourcesConfig::load(&self.dirs.sources_toml()).unwrap_or_default();
+        sources.skills.insert(
+            name.clone(),
+            SkillSource {
+                source_type: SourceType::Local,
+                url: None,
+                path: None,
+                git_ref: None,
+                hash: Some(hash),
+                updated_at: Some(
+                    chrono::Utc::now()
+                        .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+                        .to_string(),
+                ),
+                original_agent_path: Some(original_path.to_string()),
+            },
+        );
+        sources.save(&self.dirs.sources_toml())?;
+
+        Ok(name)
+    }
+
+    /// Link a local skill to a remote GitHub URL for upstream sync.
+    ///
+    /// Changes the source_type from Local to Git and records the URL/ref.
+    /// After linking, `skill update <name>` can pull from the remote.
+    pub fn link_remote(
+        &self,
+        name: &str,
+        url: &str,
+        subpath: Option<&str>,
+        git_ref: &str,
+    ) -> Result<()> {
+        if !self.exists(name) {
+            bail!("Skill '{}' not found in registry", name);
+        }
+
+        let mut sources = SourcesConfig::load(&self.dirs.sources_toml()).unwrap_or_default();
+        let entry = sources.skills.get_mut(name).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Skill '{}' has no sources entry — try re-importing it first",
+                name
+            )
+        })?;
+
+        entry.source_type = SourceType::Git;
+        entry.url = Some(url.to_string());
+        entry.path = subpath.map(|s| s.to_string());
+        entry.git_ref = Some(git_ref.to_string());
+        entry.updated_at = Some(
+            chrono::Utc::now()
+                .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+                .to_string(),
+        );
+
+        sources.save(&self.dirs.sources_toml())?;
+        Ok(())
+    }
+
+    /// Unlink a skill from its remote URL, reverting to Local type.
+    pub fn unlink_remote(&self, name: &str) -> Result<()> {
+        if !self.exists(name) {
+            bail!("Skill '{}' not found in registry", name);
+        }
+
+        let mut sources = SourcesConfig::load(&self.dirs.sources_toml()).unwrap_or_default();
+        if let Some(entry) = sources.skills.get_mut(name) {
+            entry.source_type = SourceType::Local;
+            entry.url = None;
+            entry.path = None;
+            entry.git_ref = None;
+        }
+
+        sources.save(&self.dirs.sources_toml())?;
+        Ok(())
     }
 }
 
@@ -614,5 +719,69 @@ mod tests {
             std::fs::read_to_string(dst.join("sub").join("b.txt")).unwrap(),
             "world"
         );
+    }
+
+    #[test]
+    fn test_delegate_skill() {
+        let tmp_src = TempDir::new().unwrap();
+        let skill_dir = tmp_src.path().join("ext-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: ext-skill\ndescription: External\n---\nContent",
+        )
+        .unwrap();
+
+        let (_tmp, reg) = setup_test_registry();
+        let name = reg
+            .delegate(&skill_dir, "~/.claude/skills/ext-skill")
+            .unwrap();
+        assert_eq!(name, "ext-skill");
+        assert!(reg.exists("ext-skill"));
+
+        let sources = SourcesConfig::load(&reg.dirs.sources_toml()).unwrap();
+        let src = &sources.skills["ext-skill"];
+        assert_eq!(src.source_type, SourceType::Local);
+        assert_eq!(
+            src.original_agent_path,
+            Some("~/.claude/skills/ext-skill".into())
+        );
+    }
+
+    #[test]
+    fn test_link_remote_to_local_skill() {
+        let (_tmp, reg) = setup_test_registry();
+        reg.create("my-local-skill", "A local skill").unwrap();
+
+        reg.link_remote(
+            "my-local-skill",
+            "https://github.com/owner/repo",
+            Some("skills/my-local-skill"),
+            "main",
+        )
+        .unwrap();
+
+        let sources = SourcesConfig::load(&reg.dirs.sources_toml()).unwrap();
+        let src = &sources.skills["my-local-skill"];
+        assert_eq!(src.source_type, SourceType::Git);
+        assert_eq!(src.url, Some("https://github.com/owner/repo".into()));
+        assert_eq!(src.git_ref, Some("main".into()));
+        assert_eq!(src.path, Some("skills/my-local-skill".into()));
+    }
+
+    #[test]
+    fn test_unlink_remote() {
+        let (_tmp, reg) = setup_test_registry();
+        reg.create("linked-skill", "Linked").unwrap();
+        reg.link_remote("linked-skill", "https://github.com/o/r", None, "main")
+            .unwrap();
+
+        reg.unlink_remote("linked-skill").unwrap();
+
+        let sources = SourcesConfig::load(&reg.dirs.sources_toml()).unwrap();
+        let src = &sources.skills["linked-skill"];
+        assert_eq!(src.source_type, SourceType::Local);
+        assert!(src.url.is_none());
+        assert!(src.git_ref.is_none());
     }
 }

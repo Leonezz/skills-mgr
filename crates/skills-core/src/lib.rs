@@ -1,5 +1,6 @@
 pub mod config;
 pub mod db;
+pub mod discovery;
 pub mod entity;
 pub mod logging;
 pub mod placements;
