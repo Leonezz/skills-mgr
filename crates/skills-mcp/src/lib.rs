@@ -686,6 +686,7 @@ impl SkillsMcpServer {
                                 skills_core::discovery::DiscoveryScope::Project(p) => p.clone(),
                             },
                             "files": d.files,
+                            "total_bytes": d.total_bytes,
                             "token_estimate": d.token_estimate,
                             "exists_in_registry": d.exists_in_registry,
                         })

@@ -517,11 +517,13 @@ pub async fn delegate_skills(
     if !delegated.is_empty() {
         let mut profiles_config =
             ProfilesConfig::load(&dirs.profiles_toml()).map_err(|e| e.to_string())?;
-        if let Some(profile) = profiles_config.profiles.get_mut(&profile_name) {
-            for name in &delegated {
-                if !profile.skills.contains(name) {
-                    profile.skills.push(name.clone());
-                }
+        let profile = profiles_config
+            .profiles
+            .get_mut(&profile_name)
+            .ok_or_else(|| format!("Profile '{}' not found", profile_name))?;
+        for name in &delegated {
+            if !profile.skills.contains(name) {
+                profile.skills.push(name.clone());
             }
         }
         profiles_config
