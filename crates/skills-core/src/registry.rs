@@ -346,12 +346,7 @@ impl Registry {
     ///
     /// Copies the skill directory into the registry and records the original
     /// agent path in sources.toml for tracking.
-    pub fn delegate(
-        &self,
-        source_dir: &Path,
-        _agent_name: &str,
-        original_path: &str,
-    ) -> Result<String> {
+    pub fn delegate(&self, source_dir: &Path, original_path: &str) -> Result<String> {
         let skill_md = source_dir.join("SKILL.md");
         if !skill_md.exists() {
             bail!("No SKILL.md found at {}", source_dir.display());
@@ -409,18 +404,12 @@ impl Registry {
         }
 
         let mut sources = SourcesConfig::load(&self.dirs.sources_toml()).unwrap_or_default();
-        let entry = sources
-            .skills
-            .entry(name.to_string())
-            .or_insert_with(|| SkillSource {
-                source_type: SourceType::Local,
-                url: None,
-                path: None,
-                git_ref: None,
-                hash: None,
-                updated_at: None,
-                original_agent_path: None,
-            });
+        let entry = sources.skills.get_mut(name).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Skill '{}' has no sources entry — try re-importing it first",
+                name
+            )
+        })?;
 
         entry.source_type = SourceType::Git;
         entry.url = Some(url.to_string());
@@ -745,7 +734,7 @@ mod tests {
 
         let (_tmp, reg) = setup_test_registry();
         let name = reg
-            .delegate(&skill_dir, "claude", "~/.claude/skills/ext-skill")
+            .delegate(&skill_dir, "~/.claude/skills/ext-skill")
             .unwrap();
         assert_eq!(name, "ext-skill");
         assert!(reg.exists("ext-skill"));

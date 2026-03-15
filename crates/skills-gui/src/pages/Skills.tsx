@@ -208,6 +208,7 @@ export function Skills() {
       toast.success(msg)
       queryClient.invalidateQueries({ queryKey: ["skills"] })
       queryClient.invalidateQueries({ queryKey: ["profiles"] })
+      queryClient.invalidateQueries({ queryKey: ["discoveredSkills"] })
       closeDelegateDialog()
     },
     onError: (err) => toast.error(String(err)),
@@ -958,8 +959,11 @@ export function Skills() {
               disabled={!discoverDetail || discoverDetail.exists_in_registry}
               onClick={() => {
                 if (discoverDetail) {
-                  delegateSelected.add(discoverDetail.found_path)
-                  setDelegateSelected(new Set(delegateSelected))
+                  setDelegateSelected((prev) => {
+                    const next = new Set(prev)
+                    next.add(discoverDetail.found_path)
+                    return next
+                  })
                   setShowDelegate(true)
                   setDiscoverDetail(null)
                 }
@@ -979,9 +983,10 @@ export function Skills() {
               <p className="text-muted-foreground">Loading...</p>
             ) : filteredSkills.length > 0 ? (
               <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 pb-4">
-                {filteredSkills.map((skill: Skill) => (
+                {filteredSkills.map((skill: Skill, index: number) => (
                   <SkillCard
                     key={skill.name}
+                    index={index}
                     name={skill.name}
                     description={skill.description}
                     files={skill.files}
@@ -1225,6 +1230,8 @@ interface SkillCardProps {
   description: string | null
   files: string[]
   token_estimate: number
+  /** Optional index for staggered animation */
+  index?: number
   /** Registry-mode props */
   source_type?: string | null
   is_builtin?: boolean
@@ -1243,6 +1250,7 @@ function SkillCard({
   description,
   files,
   token_estimate,
+  index,
   source_type,
   is_builtin,
   onClick,
@@ -1265,6 +1273,7 @@ function SkillCard({
   return (
     <Card
       className={`animate-list-item group cursor-pointer transition-colors ${borderClass}`}
+      style={{ animationDelay: `${(index ?? 0) * 40}ms` }}
       onClick={isDiscover ? onToggle : onClick}
     >
       <CardContent className="p-5">

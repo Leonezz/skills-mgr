@@ -41,8 +41,8 @@ pub enum DiscoveryScope {
 /// Returns discovered skills. Skills already in the registry are flagged with
 /// `exists_in_registry = true` but still returned (for conflict display).
 pub fn scan_agent_path(
-    dirs: &AppDirs,
     registry: &Registry,
+    sources: &SourcesConfig,
     agent_name: &str,
     scan_path: &Path,
     scope: DiscoveryScope,
@@ -50,8 +50,6 @@ pub fn scan_agent_path(
     if !scan_path.exists() {
         return Ok(vec![]);
     }
-
-    let sources = SourcesConfig::load(&dirs.sources_toml()).unwrap_or_default();
     let mut discovered = Vec::new();
 
     let entries = match std::fs::read_dir(scan_path) {
@@ -115,6 +113,7 @@ pub fn scan_all_agents(
     agents_config: &AgentsConfig,
     project_paths: &[String],
 ) -> Result<Vec<DiscoveredSkill>> {
+    let sources = SourcesConfig::load(&dirs.sources_toml()).unwrap_or_default();
     let mut all = Vec::new();
 
     for (agent_name, agent_def) in &agents_config.agents {
@@ -126,8 +125,8 @@ pub fn scan_all_agents(
         let global_expanded = placements::expand_tilde(&agent_def.global_path);
         let global_path = PathBuf::from(&global_expanded);
         let global_results = scan_agent_path(
-            dirs,
             registry,
+            &sources,
             agent_name,
             &global_path,
             DiscoveryScope::Global,
@@ -139,8 +138,8 @@ pub fn scan_all_agents(
             let project_dir = PathBuf::from(project_path);
             let agent_project_dir = project_dir.join(&agent_def.project_path);
             let project_results = scan_agent_path(
-                dirs,
                 registry,
+                &sources,
                 agent_name,
                 &agent_project_dir,
                 DiscoveryScope::Project(project_path.clone()),
@@ -177,7 +176,8 @@ fn parse_skill_description(skill_md: &Path) -> Option<String> {
                         break;
                     }
                 }
-                let joined = parts.join(" ");
+                let sep = if value == "|" { "\n" } else { " " };
+                let joined = parts.join(sep);
                 return if joined.is_empty() {
                     None
                 } else {
@@ -211,7 +211,11 @@ fn collect_files(base: &Path, current: &Path, files: &mut Vec<String>, total_byt
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.is_dir() {
+        if entry
+            .file_type()
+            .map(|t| t.is_dir() && !t.is_symlink())
+            .unwrap_or(false)
+        {
             collect_files(base, &path, files, total_bytes);
         } else {
             if let Ok(meta) = entry.metadata() {
@@ -239,7 +243,8 @@ mod tests {
 
     #[test]
     fn test_scan_global_finds_unmanaged_skills() {
-        let (tmp, dirs, reg) = setup_test_env();
+        let (tmp, _dirs, reg) = setup_test_env();
+        let sources = SourcesConfig::default();
 
         let global_dir = tmp.path().join("agent-global");
         let skill_dir = global_dir.join("external-skill");
@@ -251,8 +256,8 @@ mod tests {
         .unwrap();
 
         let results = scan_agent_path(
-            &dirs,
             &reg,
+            &sources,
             "test-agent",
             &global_dir,
             DiscoveryScope::Global,
@@ -269,7 +274,8 @@ mod tests {
 
     #[test]
     fn test_scan_global_skips_managed_skills() {
-        let (tmp, dirs, reg) = setup_test_env();
+        let (tmp, _dirs, reg) = setup_test_env();
+        let sources = SourcesConfig::default();
 
         reg.create("managed-skill", "Managed by us").unwrap();
 
@@ -283,8 +289,8 @@ mod tests {
         .unwrap();
 
         let results = scan_agent_path(
-            &dirs,
             &reg,
+            &sources,
             "test-agent",
             &global_dir,
             DiscoveryScope::Global,
@@ -297,7 +303,8 @@ mod tests {
 
     #[test]
     fn test_scan_skips_dirs_without_skill_md() {
-        let (tmp, dirs, reg) = setup_test_env();
+        let (tmp, _dirs, reg) = setup_test_env();
+        let sources = SourcesConfig::default();
 
         let global_dir = tmp.path().join("agent-global");
         let random_dir = global_dir.join("not-a-skill");
@@ -305,8 +312,8 @@ mod tests {
         std::fs::write(random_dir.join("README.md"), "not a skill").unwrap();
 
         let results = scan_agent_path(
-            &dirs,
             &reg,
+            &sources,
             "test-agent",
             &global_dir,
             DiscoveryScope::Global,
@@ -318,11 +325,12 @@ mod tests {
 
     #[test]
     fn test_scan_nonexistent_path_returns_empty() {
-        let (_tmp, dirs, reg) = setup_test_env();
+        let (_tmp, _dirs, reg) = setup_test_env();
+        let sources = SourcesConfig::default();
 
         let results = scan_agent_path(
-            &dirs,
             &reg,
+            &sources,
             "test-agent",
             Path::new("/nonexistent/path"),
             DiscoveryScope::Global,

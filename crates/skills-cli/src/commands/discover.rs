@@ -1,6 +1,7 @@
 use anyhow::Result;
 use skills_core::config::AppDirs;
 use skills_core::discovery::{self, DiscoveryScope};
+use skills_core::placements::GLOBAL_PROJECT_PATH;
 use skills_core::{AgentsConfig, Database, Registry};
 
 pub async fn run_discover(dirs: &AppDirs, db: &Database, global_only: bool) -> Result<()> {
@@ -18,7 +19,7 @@ pub async fn run_discover(dirs: &AppDirs, db: &Database, global_only: bool) -> R
         db.list_all_projects()
             .await?
             .into_iter()
-            .filter(|p| p.path != "__global__")
+            .filter(|p| p.path != GLOBAL_PROJECT_PATH)
             .map(|p| p.path)
             .collect()
     };

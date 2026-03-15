@@ -430,7 +430,7 @@ pub async fn scan_skills(state: State<'_, AppState>) -> Result<Vec<DiscoveredSki
         .await
         .map_err(|e| e.to_string())?
         .into_iter()
-        .filter(|p| p.path != "__global__")
+        .filter(|p| p.path != GLOBAL_PROJECT_PATH)
         .map(|p| p.path)
         .collect();
 
@@ -501,13 +501,16 @@ pub async fn delegate_skills(
     let mut delegated = Vec::new();
     for req in &skills {
         let source_path = std::path::PathBuf::from(&req.found_path);
-        match registry.delegate(&source_path, &req.agent_name, &req.found_path) {
+        let skill_name = source_path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if registry.exists(&skill_name) {
+            continue;
+        }
+        match registry.delegate(&source_path, &req.found_path) {
             Ok(name) => delegated.push(name),
-            Err(e) => {
-                if !e.to_string().contains("already exists") {
-                    return Err(e.to_string());
-                }
-            }
+            Err(e) => return Err(e.to_string()),
         }
     }
 

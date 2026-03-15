@@ -663,7 +663,7 @@ impl SkillsMcpServer {
                         .list_all_projects()
                         .await?
                         .into_iter()
-                        .filter(|p| p.path != "__global__")
+                        .filter(|p| p.path != skills_core::placements::GLOBAL_PROJECT_PATH)
                         .map(|p| p.path)
                         .collect()
                 };
@@ -685,7 +685,7 @@ impl SkillsMcpServer {
                                 skills_core::discovery::DiscoveryScope::Global => "global".to_string(),
                                 skills_core::discovery::DiscoveryScope::Project(p) => p.clone(),
                             },
-                            "files": d.files.len(),
+                            "files": d.files,
                             "token_estimate": d.token_estimate,
                             "exists_in_registry": d.exists_in_registry,
                         })
