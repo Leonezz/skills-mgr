@@ -13,18 +13,33 @@ pub async fn run_discover(dirs: &AppDirs, db: &Database, global_only: bool) -> R
         return Ok(());
     }
 
+    let all_projects = db.list_all_projects().await?;
+
     let project_paths = if global_only {
         vec![]
     } else {
-        db.list_all_projects()
-            .await?
-            .into_iter()
+        all_projects
+            .iter()
             .filter(|p| p.path != GLOBAL_PROJECT_PATH)
-            .map(|p| p.path)
+            .map(|p| p.path.clone())
             .collect()
     };
 
-    let discovered = discovery::scan_all_agents(dirs, &registry, &agents_config, &project_paths)?;
+    let mut placed_paths = std::collections::HashSet::new();
+    for project in &all_projects {
+        let placements = db.get_all_placements_for_project(project.id).await?;
+        for p in placements {
+            placed_paths.insert(p.target_path);
+        }
+    }
+
+    let discovered = discovery::scan_all_agents(
+        dirs,
+        &registry,
+        &agents_config,
+        &project_paths,
+        &placed_paths,
+    )?;
 
     if discovered.is_empty() {
         println!("No unmanaged skills found in agent paths.");

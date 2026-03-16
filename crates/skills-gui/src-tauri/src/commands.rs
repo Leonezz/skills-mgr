@@ -424,19 +424,39 @@ pub async fn scan_skills(state: State<'_, AppState>) -> Result<Vec<DiscoveredSki
     let agents_config =
         skills_core::AgentsConfig::load(&dirs.agents_toml()).map_err(|e| e.to_string())?;
 
-    let project_paths: Vec<String> = state
+    let all_projects = state
         .db
         .list_all_projects()
         .await
-        .map_err(|e| e.to_string())?
-        .into_iter()
+        .map_err(|e| e.to_string())?;
+
+    let project_paths: Vec<String> = all_projects
+        .iter()
         .filter(|p| p.path != GLOBAL_PROJECT_PATH)
-        .map(|p| p.path)
+        .map(|p| p.path.clone())
         .collect();
 
-    let discovered =
-        skills_core::discovery::scan_all_agents(dirs, &registry, &agents_config, &project_paths)
+    // Collect all placed skill paths from DB to exclude from discovery
+    let mut placed_paths = std::collections::HashSet::new();
+    for project in &all_projects {
+        let placements = state
+            .db
+            .get_all_placements_for_project(project.id)
+            .await
             .map_err(|e| e.to_string())?;
+        for p in placements {
+            placed_paths.insert(p.target_path);
+        }
+    }
+
+    let discovered = skills_core::discovery::scan_all_agents(
+        dirs,
+        &registry,
+        &agents_config,
+        &project_paths,
+        &placed_paths,
+    )
+    .map_err(|e| e.to_string())?;
 
     Ok(discovered
         .into_iter()

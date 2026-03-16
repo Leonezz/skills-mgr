@@ -656,22 +656,29 @@ impl SkillsMcpServer {
                     .unwrap_or(false);
                 let registry = Registry::new(self.dirs.clone());
                 let agents_config = AgentsConfig::load(&self.dirs.agents_toml())?;
+                let all_projects = self.db.list_all_projects().await?;
                 let project_paths = if global_only {
                     vec![]
                 } else {
-                    self.db
-                        .list_all_projects()
-                        .await?
-                        .into_iter()
+                    all_projects
+                        .iter()
                         .filter(|p| p.path != skills_core::placements::GLOBAL_PROJECT_PATH)
-                        .map(|p| p.path)
+                        .map(|p| p.path.clone())
                         .collect()
                 };
+                let mut placed_paths = std::collections::HashSet::new();
+                for project in &all_projects {
+                    let placements = self.db.get_all_placements_for_project(project.id).await?;
+                    for p in placements {
+                        placed_paths.insert(p.target_path);
+                    }
+                }
                 let discovered = skills_core::discovery::scan_all_agents(
                     &self.dirs,
                     &registry,
                     &agents_config,
                     &project_paths,
+                    &placed_paths,
                 )?;
                 let result: Vec<serde_json::Value> = discovered
                     .iter()

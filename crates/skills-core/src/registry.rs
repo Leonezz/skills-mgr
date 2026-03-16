@@ -345,7 +345,9 @@ impl Registry {
     /// Import a discovered skill into the registry (delegation).
     ///
     /// Copies the skill directory into the registry and records the original
-    /// agent path in sources.toml for tracking.
+    /// agent path in sources.toml for tracking. The original skill at the
+    /// source path is intentionally left in place — future scans will skip
+    /// it via the `original_agent_path` tracking.
     pub fn delegate(&self, source_dir: &Path, original_path: &str) -> Result<String> {
         let skill_md = source_dir.join("SKILL.md");
         if !skill_md.exists() {

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -40,9 +41,12 @@ pub enum DiscoveryScope {
 ///
 /// Returns discovered skills. Skills already in the registry are flagged with
 /// `exists_in_registry = true` but still returned (for conflict display).
+/// `placed_paths` contains target paths of skills placed by skills-mgr
+/// (from the placements DB). Skills at these paths are skipped.
 pub fn scan_agent_path(
     registry: &Registry,
     sources: &SourcesConfig,
+    placed_paths: &HashSet<String>,
     agent_name: &str,
     scan_path: &Path,
     scope: DiscoveryScope,
@@ -70,18 +74,18 @@ pub fn scan_agent_path(
 
         let name = entry.file_name().to_string_lossy().to_string();
 
-        // Skip if this skill was previously delegated — check both by path and by name
+        // Skip skills placed by skills-mgr (via profile activation)
         let skill_dir_str = skill_dir.to_string_lossy();
-        let is_tracked_by_path = sources
+        if placed_paths.contains(&*skill_dir_str) {
+            continue;
+        }
+
+        // Skip if this skill was previously delegated (tracked in sources.toml)
+        let is_tracked_delegation = sources
             .skills
             .values()
             .any(|s| s.original_agent_path.as_deref() == Some(&*skill_dir_str));
-        let is_tracked_by_name = sources
-            .skills
-            .get(&name)
-            .and_then(|s| s.original_agent_path.as_ref())
-            .is_some();
-        if is_tracked_by_path || is_tracked_by_name {
+        if is_tracked_delegation {
             continue;
         }
 
@@ -113,11 +117,15 @@ pub fn scan_agent_path(
 ///
 /// `project_paths` is a list of known project directories to scan for
 /// project-level skills. Pass empty slice to scan only global paths.
+/// `placed_paths` contains target paths of all skills placed by skills-mgr
+/// (queried from the placements DB by the caller). Skills at these paths
+/// are excluded from discovery results.
 pub fn scan_all_agents(
     dirs: &AppDirs,
     registry: &Registry,
     agents_config: &AgentsConfig,
     project_paths: &[String],
+    placed_paths: &HashSet<String>,
 ) -> Result<Vec<DiscoveredSkill>> {
     let sources = match SourcesConfig::load(&dirs.sources_toml()) {
         Ok(s) => s,
@@ -139,6 +147,7 @@ pub fn scan_all_agents(
         let global_results = scan_agent_path(
             registry,
             &sources,
+            placed_paths,
             agent_name,
             &global_path,
             DiscoveryScope::Global,
@@ -152,6 +161,7 @@ pub fn scan_all_agents(
             let project_results = scan_agent_path(
                 registry,
                 &sources,
+                placed_paths,
                 agent_name,
                 &agent_project_dir,
                 DiscoveryScope::Project(project_path.clone()),
@@ -178,7 +188,7 @@ fn parse_skill_description(skill_md: &Path) -> Option<String> {
         let trimmed = line.trim();
         if let Some(value) = trimmed.strip_prefix("description:") {
             let value = value.trim().trim_matches('"').trim_matches('\'');
-            if value == ">" || value == "|" {
+            if value.starts_with('>') || value.starts_with('|') {
                 // YAML multiline scalar — collect indented continuation lines
                 let mut parts = Vec::new();
                 for cont in &lines[i + 1..] {
@@ -188,7 +198,7 @@ fn parse_skill_description(skill_md: &Path) -> Option<String> {
                         break;
                     }
                 }
-                let sep = if value == "|" { "\n" } else { " " };
+                let sep = if value.starts_with('|') { "\n" } else { " " };
                 let joined = parts.join(sep);
                 return if joined.is_empty() {
                     None
@@ -273,6 +283,7 @@ mod tests {
         let results = scan_agent_path(
             &reg,
             &sources,
+            &HashSet::new(),
             "test-agent",
             &global_dir,
             DiscoveryScope::Global,
@@ -306,6 +317,7 @@ mod tests {
         let results = scan_agent_path(
             &reg,
             &sources,
+            &HashSet::new(),
             "test-agent",
             &global_dir,
             DiscoveryScope::Global,
@@ -329,6 +341,7 @@ mod tests {
         let results = scan_agent_path(
             &reg,
             &sources,
+            &HashSet::new(),
             "test-agent",
             &global_dir,
             DiscoveryScope::Global,
@@ -346,6 +359,7 @@ mod tests {
         let results = scan_agent_path(
             &reg,
             &sources,
+            &HashSet::new(),
             "test-agent",
             Path::new("/nonexistent/path"),
             DiscoveryScope::Global,
@@ -383,7 +397,7 @@ mod tests {
             },
         };
 
-        let results = scan_all_agents(&dirs, &reg, &agents_config, &[]).unwrap();
+        let results = scan_all_agents(&dirs, &reg, &agents_config, &[], &HashSet::new()).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].name, "my-skill");
         assert_eq!(results[0].agent_name, "claude");
