@@ -499,6 +499,7 @@ pub async fn delegate_skills(
     }
 
     let mut delegated = Vec::new();
+    let mut skipped = Vec::new();
     for req in &skills {
         let source_path = std::path::PathBuf::from(&req.found_path);
         let skill_name = source_path
@@ -506,6 +507,7 @@ pub async fn delegate_skills(
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
         if registry.exists(&skill_name) {
+            skipped.push(skill_name);
             continue;
         }
         match registry.delegate(&source_path, &req.found_path) {
@@ -549,11 +551,19 @@ pub async fn delegate_skills(
     )
     .await;
 
-    Ok(format!(
+    let mut msg = format!(
         "Delegated {} skill(s) to profile '{}'",
         delegated.len(),
         profile_name
-    ))
+    );
+    if !skipped.is_empty() {
+        msg.push_str(&format!(
+            " ({} already in registry: {})",
+            skipped.len(),
+            skipped.join(", ")
+        ));
+    }
+    Ok(msg)
 }
 
 #[tauri::command]

@@ -63,7 +63,7 @@ pub async fn run_discover(dirs: &AppDirs, db: &Database, global_only: bool) -> R
         );
     }
 
-    println!("\nUse `skills-mgr skill add <path>` to import individual skills.");
+    println!("\nUse the GUI's Discover tab to delegate skills to a profile.");
     Ok(())
 }
 

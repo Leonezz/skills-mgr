@@ -113,7 +113,13 @@ pub fn scan_all_agents(
     agents_config: &AgentsConfig,
     project_paths: &[String],
 ) -> Result<Vec<DiscoveredSkill>> {
-    let sources = SourcesConfig::load(&dirs.sources_toml()).unwrap_or_default();
+    let sources = match SourcesConfig::load(&dirs.sources_toml()) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!("could not load sources.toml, treating all skills as unmanaged: {e}");
+            SourcesConfig::default()
+        }
+    };
     let mut all = Vec::new();
 
     for (agent_name, agent_def) in &agents_config.agents {
@@ -211,6 +217,9 @@ fn collect_files(base: &Path, current: &Path, files: &mut Vec<String>, total_byt
     };
     for entry in entries.flatten() {
         let path = entry.path();
+        // DirEntry::file_type() does not follow symlinks, so is_dir() is already
+        // false for symlinks-to-directories. The !is_symlink() guard is kept as
+        // defense-in-depth against platform differences.
         if entry
             .file_type()
             .map(|t| t.is_dir() && !t.is_symlink())

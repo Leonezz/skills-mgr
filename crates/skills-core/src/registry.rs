@@ -437,6 +437,11 @@ impl Registry {
             entry.url = None;
             entry.path = None;
             entry.git_ref = None;
+            entry.updated_at = Some(
+                chrono::Utc::now()
+                    .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+                    .to_string(),
+            );
         }
 
         sources.save(&self.dirs.sources_toml())?;
