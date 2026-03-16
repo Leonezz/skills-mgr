@@ -1,6 +1,10 @@
 /target
 .DS_Store
 
+# Placed skills (created by profile activation)
+.claude/skills/
+.cursor/skills/
+
 # Frontend
 crates/skills-gui/node_modules/
 crates/skills-gui/dist/
