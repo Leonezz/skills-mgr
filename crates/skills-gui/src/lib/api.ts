@@ -67,8 +67,6 @@ export async function scanSkills() {
 }
 
 export interface DelegateRequest {
-  name: string
-  agent_name: string
   found_path: string
 }
 

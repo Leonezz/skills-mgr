@@ -434,17 +434,21 @@ impl Registry {
         }
 
         let mut sources = SourcesConfig::load(&self.dirs.sources_toml()).unwrap_or_default();
-        if let Some(entry) = sources.skills.get_mut(name) {
-            entry.source_type = SourceType::Local;
-            entry.url = None;
-            entry.path = None;
-            entry.git_ref = None;
-            entry.updated_at = Some(
-                chrono::Utc::now()
-                    .format("%Y-%m-%dT%H:%M:%S%.3fZ")
-                    .to_string(),
-            );
-        }
+        let entry = sources.skills.get_mut(name).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Skill '{}' has no sources entry — try re-importing it first",
+                name
+            )
+        })?;
+        entry.source_type = SourceType::Local;
+        entry.url = None;
+        entry.path = None;
+        entry.git_ref = None;
+        entry.updated_at = Some(
+            chrono::Utc::now()
+                .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+                .to_string(),
+        );
 
         sources.save(&self.dirs.sources_toml())?;
         Ok(())

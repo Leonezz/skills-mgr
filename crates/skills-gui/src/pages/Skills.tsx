@@ -196,8 +196,6 @@ export function Skills() {
       if (!discovered) return Promise.reject(new Error("No discovered skills"))
       const selected = discovered.filter((s) => delegateSelected.has(s.found_path))
       const requests: DelegateRequest[] = selected.map((s) => ({
-        name: s.name,
-        agent_name: s.agent_name,
         found_path: s.found_path,
       }))
       const isNew = delegateMode === "new"
