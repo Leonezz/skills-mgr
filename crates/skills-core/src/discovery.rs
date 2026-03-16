@@ -70,12 +70,18 @@ pub fn scan_agent_path(
 
         let name = entry.file_name().to_string_lossy().to_string();
 
-        // Skip if this path is already tracked as a delegated skill's original_agent_path
-        let is_tracked_delegation = sources
+        // Skip if this skill was previously delegated — check both by path and by name
+        let skill_dir_str = skill_dir.to_string_lossy();
+        let is_tracked_by_path = sources
             .skills
             .values()
-            .any(|s| s.original_agent_path.as_deref() == Some(&*skill_dir.to_string_lossy()));
-        if is_tracked_delegation {
+            .any(|s| s.original_agent_path.as_deref() == Some(&*skill_dir_str));
+        let is_tracked_by_name = sources
+            .skills
+            .get(&name)
+            .and_then(|s| s.original_agent_path.as_ref())
+            .is_some();
+        if is_tracked_by_path || is_tracked_by_name {
             continue;
         }
 
@@ -282,7 +288,7 @@ mod tests {
     }
 
     #[test]
-    fn test_scan_global_skips_managed_skills() {
+    fn test_scan_global_flags_managed_skills_as_conflict() {
         let (tmp, _dirs, reg) = setup_test_env();
         let sources = SourcesConfig::default();
 

@@ -1060,7 +1060,7 @@ export function Skills() {
 
             {discovered && discovered.length === 0 && !isScanning && (
               <p className="text-muted-foreground">
-                No undiscovered skills found. All skills from your agents are already in the registry.
+                No unmanaged skills found in agent paths.
               </p>
             )}
           </div>
