@@ -481,10 +481,7 @@ pub async fn scan_skills(state: State<'_, AppState>) -> Result<Vec<DiscoveredSki
 }
 
 #[derive(Deserialize)]
-#[allow(dead_code)]
 pub struct DelegateRequest {
-    pub name: String,
-    pub agent_name: String,
     pub found_path: String,
 }
 
@@ -499,9 +496,10 @@ pub async fn delegate_skills(
     let dirs = &state.dirs;
     let registry = Registry::new(dirs.clone());
 
+    // Validate or create profile BEFORE delegating any skills
+    let mut profiles_config =
+        ProfilesConfig::load(&dirs.profiles_toml()).map_err(|e| e.to_string())?;
     if create_profile {
-        let mut profiles_config =
-            ProfilesConfig::load(&dirs.profiles_toml()).map_err(|e| e.to_string())?;
         if profiles_config.profiles.contains_key(&profile_name) {
             return Err(format!("Profile '{}' already exists", profile_name));
         }
@@ -516,6 +514,8 @@ pub async fn delegate_skills(
         profiles_config
             .save(&dirs.profiles_toml())
             .map_err(|e| e.to_string())?;
+    } else if !profiles_config.profiles.contains_key(&profile_name) {
+        return Err(format!("Profile '{}' not found", profile_name));
     }
 
     let mut delegated = Vec::new();
@@ -532,20 +532,30 @@ pub async fn delegate_skills(
         }
         match registry.delegate(&source_path, &req.found_path) {
             Ok(name) => delegated.push(name),
-            Err(e) => return Err(e.to_string()),
+            Err(e) => {
+                let already = if delegated.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        " ({} already imported: {})",
+                        delegated.len(),
+                        delegated.join(", ")
+                    )
+                };
+                return Err(format!("{}{}", e, already));
+            }
         }
     }
 
+    // Reload config (may have been saved above) and assign skills to profile
     if !delegated.is_empty() {
         let mut profiles_config =
             ProfilesConfig::load(&dirs.profiles_toml()).map_err(|e| e.to_string())?;
-        let profile = profiles_config
-            .profiles
-            .get_mut(&profile_name)
-            .ok_or_else(|| format!("Profile '{}' not found", profile_name))?;
-        for name in &delegated {
-            if !profile.skills.contains(name) {
-                profile.skills.push(name.clone());
+        if let Some(profile) = profiles_config.profiles.get_mut(&profile_name) {
+            for name in &delegated {
+                if !profile.skills.contains(name) {
+                    profile.skills.push(name.clone());
+                }
             }
         }
         profiles_config

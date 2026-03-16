@@ -223,6 +223,7 @@ fn list_skill_files(dir: &Path) -> (Vec<String>, u64, u64) {
     let mut total_bytes: u64 = 0;
     collect_files(dir, dir, &mut files, &mut total_bytes);
     files.sort();
+    // ~4 bytes per token — rough ASCII approximation, used for display only
     (files, total_bytes, total_bytes / 4)
 }
 

@@ -241,7 +241,7 @@ export function Settings() {
         <h3 className="text-base font-semibold">Skill Discovery</h3>
         <div className="flex items-center justify-between">
           <div className="space-y-0.5">
-            <span className="text-sm font-medium">Auto-scan on Startup</span>
+            <span className="text-sm font-medium">Auto-scan on Startup <span className="text-xs text-muted-foreground font-normal">(coming soon)</span></span>
             <p className="text-xs text-muted-foreground">
               Automatically scan agent paths for unmanaged skills when the app starts
             </p>
