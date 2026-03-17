@@ -666,13 +666,7 @@ impl SkillsMcpServer {
                         .map(|p| p.path.clone())
                         .collect()
                 };
-                let mut placed_paths = std::collections::HashSet::new();
-                for project in &all_projects {
-                    let placements = self.db.get_all_placements_for_project(project.id).await?;
-                    for p in placements {
-                        placed_paths.insert(p.target_path);
-                    }
-                }
+                let placed_paths = self.db.collect_placed_paths().await?;
                 let discovered = skills_core::discovery::scan_all_agents(
                     &self.dirs,
                     &registry,

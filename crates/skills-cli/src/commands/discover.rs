@@ -25,13 +25,7 @@ pub async fn run_discover(dirs: &AppDirs, db: &Database, global_only: bool) -> R
             .collect()
     };
 
-    let mut placed_paths = std::collections::HashSet::new();
-    for project in &all_projects {
-        let placements = db.get_all_placements_for_project(project.id).await?;
-        for p in placements {
-            placed_paths.insert(p.target_path);
-        }
-    }
+    let placed_paths = db.collect_placed_paths().await?;
 
     let discovered = discovery::scan_all_agents(
         dirs,

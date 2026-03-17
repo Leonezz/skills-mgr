@@ -437,17 +437,11 @@ pub async fn scan_skills(state: State<'_, AppState>) -> Result<Vec<DiscoveredSki
         .collect();
 
     // Collect all placed skill paths from DB to exclude from discovery
-    let mut placed_paths = std::collections::HashSet::new();
-    for project in &all_projects {
-        let placements = state
-            .db
-            .get_all_placements_for_project(project.id)
-            .await
-            .map_err(|e| e.to_string())?;
-        for p in placements {
-            placed_paths.insert(p.target_path);
-        }
-    }
+    let placed_paths = state
+        .db
+        .collect_placed_paths()
+        .await
+        .map_err(|e| e.to_string())?;
 
     let discovered = skills_core::discovery::scan_all_agents(
         dirs,
@@ -532,14 +526,13 @@ pub async fn delegate_skills(
         }
         match registry.delegate(&source_path, &req.found_path) {
             Ok(name) => {
-                // Assign to profile immediately so partial failures don't orphan skills
-                let mut pc =
-                    ProfilesConfig::load(&dirs.profiles_toml()).map_err(|e| e.to_string())?;
-                if let Some(profile) = pc.profiles.get_mut(&profile_name) {
+                if let Some(profile) = profiles_config.profiles.get_mut(&profile_name) {
                     if !profile.skills.contains(&name) {
                         profile.skills.push(name.clone());
                     }
-                    pc.save(&dirs.profiles_toml()).map_err(|e| e.to_string())?;
+                    profiles_config
+                        .save(&dirs.profiles_toml())
+                        .map_err(|e| e.to_string())?;
                 }
                 delegated.push(name);
             }
