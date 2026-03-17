@@ -338,15 +338,20 @@ fn scan_for_skills_inner(
 
     let skill_md = dir.join("SKILL.md");
     if skill_md.exists() {
-        let name = dir
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
         let subpath = dir
             .strip_prefix(repo_root)
             .unwrap_or(dir)
             .to_string_lossy()
             .to_string();
+        // For root-level skills (empty subpath), use the frontmatter name
+        // instead of the directory name (which is "repo" from staging)
+        let name = if subpath.is_empty() {
+            parse_skill_name(&skill_md).unwrap_or_default()
+        } else {
+            dir.file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default()
+        };
         let description = parse_skill_description(&skill_md);
 
         skills.push(RemoteSkillEntry {
@@ -372,6 +377,26 @@ fn scan_for_skills_inner(
 }
 
 /// Parse description from a SKILL.md file's YAML frontmatter.
+fn parse_skill_name(skill_md: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(skill_md).ok()?;
+    let content = content.trim();
+    if !content.starts_with("---") {
+        return None;
+    }
+    let end = content[3..].find("---")?;
+    let frontmatter = &content[3..3 + end];
+    for line in frontmatter.lines() {
+        let line = line.trim();
+        if let Some(name) = line.strip_prefix("name:") {
+            let name = name.trim().trim_matches('"').trim_matches('\'');
+            if !name.is_empty() {
+                return Some(name.to_string());
+            }
+        }
+    }
+    None
+}
+
 fn parse_skill_description(skill_md: &Path) -> Option<String> {
     let content = std::fs::read_to_string(skill_md).ok()?;
     let content = content.trim();

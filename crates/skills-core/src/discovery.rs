@@ -221,13 +221,24 @@ fn parse_skill_description(skill_md: &Path) -> Option<String> {
 fn list_skill_files(dir: &Path) -> (Vec<String>, u64, u64) {
     let mut files = Vec::new();
     let mut total_bytes: u64 = 0;
-    collect_files(dir, dir, &mut files, &mut total_bytes);
+    collect_files(dir, dir, &mut files, &mut total_bytes, 0);
     files.sort();
     // ~4 bytes per token — rough ASCII approximation, used for display only
     (files, total_bytes, total_bytes / 4)
 }
 
-fn collect_files(base: &Path, current: &Path, files: &mut Vec<String>, total_bytes: &mut u64) {
+const MAX_COLLECT_DEPTH: u32 = 10;
+
+fn collect_files(
+    base: &Path,
+    current: &Path,
+    files: &mut Vec<String>,
+    total_bytes: &mut u64,
+    depth: u32,
+) {
+    if depth > MAX_COLLECT_DEPTH {
+        return;
+    }
     let entries = match std::fs::read_dir(current) {
         Ok(e) => e,
         Err(_) => return,
@@ -242,7 +253,7 @@ fn collect_files(base: &Path, current: &Path, files: &mut Vec<String>, total_byt
             .map(|t| t.is_dir() && !t.is_symlink())
             .unwrap_or(false)
         {
-            collect_files(base, &path, files, total_bytes);
+            collect_files(base, &path, files, total_bytes, depth + 1);
         } else {
             if let Ok(meta) = entry.metadata() {
                 *total_bytes += meta.len();
