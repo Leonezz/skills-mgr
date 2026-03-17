@@ -531,36 +531,34 @@ pub async fn delegate_skills(
             continue;
         }
         match registry.delegate(&source_path, &req.found_path) {
-            Ok(name) => delegated.push(name),
-            Err(e) => {
-                let already = if delegated.is_empty() {
-                    String::new()
-                } else {
-                    format!(
-                        " ({} already imported: {})",
-                        delegated.len(),
-                        delegated.join(", ")
-                    )
-                };
-                return Err(format!("{}{}", e, already));
-            }
-        }
-    }
-
-    // Reload config (may have been saved above) and assign skills to profile
-    if !delegated.is_empty() {
-        let mut profiles_config =
-            ProfilesConfig::load(&dirs.profiles_toml()).map_err(|e| e.to_string())?;
-        if let Some(profile) = profiles_config.profiles.get_mut(&profile_name) {
-            for name in &delegated {
-                if !profile.skills.contains(name) {
-                    profile.skills.push(name.clone());
+            Ok(name) => {
+                // Assign to profile immediately so partial failures don't orphan skills
+                let mut pc =
+                    ProfilesConfig::load(&dirs.profiles_toml()).map_err(|e| e.to_string())?;
+                if let Some(profile) = pc.profiles.get_mut(&profile_name) {
+                    if !profile.skills.contains(&name) {
+                        profile.skills.push(name.clone());
+                    }
+                    pc.save(&dirs.profiles_toml()).map_err(|e| e.to_string())?;
                 }
+                delegated.push(name);
+            }
+            Err(e) => {
+                return Err(format!(
+                    "{}{}",
+                    e,
+                    if delegated.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            " ({} already imported and assigned: {})",
+                            delegated.len(),
+                            delegated.join(", ")
+                        )
+                    }
+                ));
             }
         }
-        profiles_config
-            .save(&dirs.profiles_toml())
-            .map_err(|e| e.to_string())?;
     }
 
     let _ = logging::log(

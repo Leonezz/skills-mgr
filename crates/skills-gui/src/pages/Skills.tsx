@@ -1384,8 +1384,12 @@ function DiscoverResults({ discovered, selected, onToggle, onToggleAll, onDetail
   const grouped = useMemo(() => {
     const map = new Map<string, DiscoveredSkill[]>()
     for (const s of discovered) {
-      const existing = map.get(s.scope) ?? []
-      map.set(s.scope, [...existing, s])
+      const existing = map.get(s.scope)
+      if (existing) {
+        existing.push(s)
+      } else {
+        map.set(s.scope, [s])
+      }
     }
     return map
   }, [discovered])

@@ -74,9 +74,12 @@ pub fn scan_agent_path(
 
         let name = entry.file_name().to_string_lossy().to_string();
 
+        // Canonicalize for reliable comparison (e.g. /var → /private/var on macOS)
+        let canonical = std::fs::canonicalize(&skill_dir).unwrap_or_else(|_| skill_dir.clone());
+        let canonical_str = canonical.to_string_lossy();
+
         // Skip skills placed by skills-mgr (via profile activation)
-        let skill_dir_str = skill_dir.to_string_lossy();
-        if placed_paths.contains(&*skill_dir_str) {
+        if placed_paths.contains(&*canonical_str) {
             continue;
         }
 
@@ -84,7 +87,7 @@ pub fn scan_agent_path(
         let is_tracked_delegation = sources
             .skills
             .values()
-            .any(|s| s.original_agent_path.as_deref() == Some(&*skill_dir_str));
+            .any(|s| s.original_agent_path.as_deref() == Some(&*canonical_str));
         if is_tracked_delegation {
             continue;
         }
@@ -173,47 +176,9 @@ pub fn scan_all_agents(
     Ok(all)
 }
 
-/// Parse description from a SKILL.md frontmatter.
-/// Handles both inline values and YAML multiline scalars (> and |).
+/// Parse description from a SKILL.md frontmatter (delegates to shared parser).
 fn parse_skill_description(skill_md: &Path) -> Option<String> {
-    let content = std::fs::read_to_string(skill_md).ok()?;
-    let content = content.trim();
-    if !content.starts_with("---") {
-        return None;
-    }
-    let end = content[3..].find("---")?;
-    let frontmatter = &content[3..3 + end];
-    let lines: Vec<&str> = frontmatter.lines().collect();
-    for (i, line) in lines.iter().enumerate() {
-        let trimmed = line.trim();
-        if let Some(value) = trimmed.strip_prefix("description:") {
-            let value = value.trim().trim_matches('"').trim_matches('\'');
-            if value.starts_with('>') || value.starts_with('|') {
-                // YAML multiline scalar — collect indented continuation lines
-                let mut parts = Vec::new();
-                for cont in &lines[i + 1..] {
-                    if cont.starts_with(' ') || cont.starts_with('\t') {
-                        parts.push(cont.trim());
-                    } else {
-                        break;
-                    }
-                }
-                let sep = if value.starts_with('|') { "\n" } else { " " };
-                let joined = parts.join(sep);
-                return if joined.is_empty() {
-                    None
-                } else {
-                    Some(joined)
-                };
-            }
-            return if value.is_empty() {
-                None
-            } else {
-                Some(value.to_string())
-            };
-        }
-    }
-    None
+    crate::frontmatter::parse_description(skill_md)
 }
 
 /// List files and compute size stats for a skill directory.

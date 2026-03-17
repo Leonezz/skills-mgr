@@ -376,45 +376,14 @@ fn scan_for_skills_inner(
     Ok(())
 }
 
-/// Parse description from a SKILL.md file's YAML frontmatter.
+/// Parse name from SKILL.md frontmatter (delegates to shared parser).
 fn parse_skill_name(skill_md: &Path) -> Option<String> {
-    let content = std::fs::read_to_string(skill_md).ok()?;
-    let content = content.trim();
-    if !content.starts_with("---") {
-        return None;
-    }
-    let end = content[3..].find("---")?;
-    let frontmatter = &content[3..3 + end];
-    for line in frontmatter.lines() {
-        let line = line.trim();
-        if let Some(name) = line.strip_prefix("name:") {
-            let name = name.trim().trim_matches('"').trim_matches('\'');
-            if !name.is_empty() {
-                return Some(name.to_string());
-            }
-        }
-    }
-    None
+    crate::frontmatter::parse_name(skill_md)
 }
 
+/// Parse description from SKILL.md frontmatter (delegates to shared parser).
 fn parse_skill_description(skill_md: &Path) -> Option<String> {
-    let content = std::fs::read_to_string(skill_md).ok()?;
-    let content = content.trim();
-    if !content.starts_with("---") {
-        return None;
-    }
-    let end = content[3..].find("---")?;
-    let frontmatter = &content[3..3 + end];
-    for line in frontmatter.lines() {
-        let line = line.trim();
-        if let Some(desc) = line.strip_prefix("description:") {
-            let desc = desc.trim().trim_matches('"').trim_matches('\'');
-            if !desc.is_empty() {
-                return Some(desc.to_string());
-            }
-        }
-    }
-    None
+    crate::frontmatter::parse_description(skill_md)
 }
 
 /// Find the single child directory inside a directory (GitHub tarball structure).

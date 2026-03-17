@@ -382,7 +382,11 @@ impl Registry {
                         .format("%Y-%m-%dT%H:%M:%S%.3fZ")
                         .to_string(),
                 ),
-                original_agent_path: Some(original_path.to_string()),
+                original_agent_path: Some(
+                    std::fs::canonicalize(original_path)
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_else(|_| original_path.to_string()),
+                ),
             },
         );
         sources.save(&self.dirs.sources_toml())?;
