@@ -58,7 +58,14 @@ pub fn scan_agent_path(
 
     let entries = match std::fs::read_dir(scan_path) {
         Ok(e) => e,
-        Err(_) => return Ok(vec![]),
+        Err(err) => {
+            tracing::warn!(
+                "failed to read agent path {}, err={}, skipping discovery for this path",
+                scan_path.display(),
+                err
+            );
+            return Ok(vec![]);
+        }
     };
 
     for entry in entries.flatten() {

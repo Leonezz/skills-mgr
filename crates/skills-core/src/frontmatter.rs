@@ -7,7 +7,7 @@ fn extract_frontmatter(content: &str) -> Option<&str> {
     if !content.starts_with("---") {
         return None;
     }
-    let end = content[3..].find("---")?;
+    let end = content[3..].find("\n---")?;
     Some(&content[3..3 + end])
 }
 
