@@ -30,6 +30,7 @@ export function Settings() {
         mcp_transport: "stdio",
         git_sync_enabled: false,
         git_sync_repo_url: "",
+        scan_auto_on_startup: false,
       })
     })
   }, [])
@@ -230,6 +231,24 @@ export function Settings() {
             onBlur={() => { if (settings) update({ git_sync_repo_url: settings.git_sync_repo_url }) }}
             placeholder="https://github.com/user/skills-repo.git"
             className="h-9"
+            disabled={!settings || saving}
+          />
+        </div>
+      </section>
+
+      {/* Skill Discovery */}
+      <section className="space-y-4 rounded-xl border border-border bg-card p-6">
+        <h3 className="text-base font-semibold">Skill Discovery</h3>
+        <div className="flex items-center justify-between">
+          <div className="space-y-0.5">
+            <span className="text-sm font-medium">Auto-scan on Startup <span className="text-xs text-muted-foreground font-normal">(coming soon)</span></span>
+            <p className="text-xs text-muted-foreground">
+              Automatically scan agent paths for unmanaged skills when the app starts
+            </p>
+          </div>
+          <Switch
+            checked={settings?.scan_auto_on_startup ?? false}
+            onCheckedChange={(checked) => update({ scan_auto_on_startup: checked })}
             disabled={!settings || saving}
           />
         </div>

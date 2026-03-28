@@ -518,6 +518,24 @@ impl Database {
             .await?;
         Ok(rows.into_iter().map(|r| r.profile_name).collect())
     }
+
+    /// Collect all placed skill target paths across all projects.
+    /// Returns a HashSet of canonicalized absolute paths for use in discovery filtering.
+    pub async fn collect_placed_paths(&self) -> Result<std::collections::HashSet<String>> {
+        let projects = self.list_all_projects().await?;
+        let mut paths = std::collections::HashSet::new();
+        for project in &projects {
+            let placements = self.get_all_placements_for_project(project.id).await?;
+            for p in placements {
+                // Canonicalize for reliable comparison (e.g. /var → /private/var on macOS)
+                let canonical = std::fs::canonicalize(&p.target_path)
+                    .map(|c| c.to_string_lossy().to_string())
+                    .unwrap_or(p.target_path);
+                paths.insert(canonical);
+            }
+        }
+        Ok(paths)
+    }
 }
 
 #[derive(Debug)]

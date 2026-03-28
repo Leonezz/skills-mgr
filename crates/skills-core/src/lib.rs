@@ -1,6 +1,8 @@
 pub mod config;
 pub mod db;
+pub mod discovery;
 pub mod entity;
+pub mod frontmatter;
 pub mod logging;
 pub mod placements;
 pub mod profiles;

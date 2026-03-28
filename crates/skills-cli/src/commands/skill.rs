@@ -198,6 +198,20 @@ pub async fn run(dirs: &AppDirs, db: &Database, action: SkillAction) -> Result<(
             }
             None => println!("Skill '{}' not found", name),
         },
+        SkillAction::Discover { global_only } => {
+            super::discover::run_discover(dirs, db, global_only).await?;
+        }
+        SkillAction::LinkRemote {
+            name,
+            url,
+            subpath,
+            git_ref,
+        } => {
+            super::discover::run_link_remote(dirs, &name, &url, subpath.as_deref(), &git_ref)?;
+        }
+        SkillAction::UnlinkRemote { name } => {
+            super::discover::run_unlink_remote(dirs, &name)?;
+        }
     }
 
     Ok(())

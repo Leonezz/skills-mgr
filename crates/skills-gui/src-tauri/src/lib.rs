@@ -47,6 +47,8 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(AppState { dirs, db })
+        // TODO: wire up settings.scan.auto_scan_on_startup to trigger
+        // scan_skills on app launch when enabled
         .invoke_handler(tauri::generate_handler![
             commands::list_skills,
             commands::create_skill,
@@ -81,6 +83,10 @@ pub fn run() {
             commands::deactivate_project,
             commands::activate_profile,
             commands::deactivate_profile,
+            commands::scan_skills,
+            commands::delegate_skills,
+            commands::link_remote,
+            commands::unlink_remote,
             commands::get_settings,
             commands::save_settings,
             commands::get_recent_logs,

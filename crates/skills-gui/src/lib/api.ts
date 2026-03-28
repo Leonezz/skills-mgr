@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core"
 import { z } from "zod"
 import {
   SkillSchema,
+  DiscoveredSkillSchema,
   ProfilesResponseSchema,
   ProjectSchema,
   AgentSchema,
@@ -56,6 +57,44 @@ export async function readSkillContent(name: string) {
 
 export async function updateSkill(name: string, description: string) {
   return await invoke("update_skill", { name, description }) as string
+}
+
+// --- Discovery & Delegation ---
+
+export async function scanSkills() {
+  const data = await invoke("scan_skills")
+  return z.array(DiscoveredSkillSchema).parse(data)
+}
+
+export interface DelegateRequest {
+  found_path: string
+}
+
+export async function delegateSkills(
+  skills: DelegateRequest[],
+  profileName: string,
+  createProfile: boolean,
+  profileDescription?: string,
+) {
+  return await invoke("delegate_skills", {
+    skills,
+    profileName,
+    createProfile,
+    profileDescription,
+  }) as string
+}
+
+export async function linkRemote(
+  name: string,
+  url: string,
+  gitRef: string,
+  subpath?: string,
+) {
+  return await invoke("link_remote", { name, url, subpath, gitRef }) as string
+}
+
+export async function unlinkRemote(name: string) {
+  return await invoke("unlink_remote", { name }) as string
 }
 
 // --- Profiles ---
@@ -178,6 +217,7 @@ export interface SettingsPayload {
   mcp_transport: string
   git_sync_enabled: boolean
   git_sync_repo_url: string
+  scan_auto_on_startup: boolean
 }
 
 export async function getSettings() {

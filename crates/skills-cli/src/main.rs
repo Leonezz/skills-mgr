@@ -95,6 +95,26 @@ pub enum SkillAction {
     Files {
         name: String,
     },
+    /// Discover unmanaged skills in agent paths
+    Discover {
+        /// Only scan global paths (skip project paths)
+        #[arg(long)]
+        global_only: bool,
+    },
+    /// Link a local skill to a remote GitHub URL for sync
+    LinkRemote {
+        name: String,
+        #[arg(long)]
+        url: String,
+        #[arg(long)]
+        subpath: Option<String>,
+        #[arg(long, default_value = "main")]
+        git_ref: String,
+    },
+    /// Unlink a skill from its remote URL
+    UnlinkRemote {
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]

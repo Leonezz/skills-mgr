@@ -89,6 +89,8 @@ pub struct SkillSource {
     pub git_ref: Option<String>,
     pub hash: Option<String>,
     pub updated_at: Option<String>,
+    #[serde(default)]
+    pub original_agent_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -188,6 +190,14 @@ pub struct AppSettings {
     pub mcp: McpSettings,
     #[serde(default)]
     pub git_sync: GitSyncSettings,
+    #[serde(default)]
+    pub scan: ScanSettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ScanSettings {
+    #[serde(default)]
+    pub auto_scan_on_startup: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -339,6 +349,7 @@ mod tests {
                         git_ref: Some("main".into()),
                         hash: Some("sha256:abc123".into()),
                         updated_at: Some("2026-03-10T12:00:00Z".into()),
+                        original_agent_path: None,
                     },
                 );
                 m
@@ -379,5 +390,53 @@ mod tests {
         let config = ProfilesConfig::load(&path).unwrap();
         assert!(config.base.skills.is_empty());
         assert!(config.profiles.is_empty());
+    }
+
+    #[test]
+    fn test_sources_config_original_agent_path_roundtrip() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("sources.toml");
+
+        let config = SourcesConfig {
+            skills: {
+                let mut m = std::collections::BTreeMap::new();
+                m.insert(
+                    "delegated-skill".into(),
+                    SkillSource {
+                        source_type: SourceType::Local,
+                        url: None,
+                        path: None,
+                        git_ref: None,
+                        hash: Some("sha256:abc123".into()),
+                        updated_at: Some("2026-03-14T12:00:00Z".into()),
+                        original_agent_path: Some("~/.claude/skills/delegated-skill".into()),
+                    },
+                );
+                m
+            },
+        };
+        config.save(&path).unwrap();
+        let loaded = SourcesConfig::load(&path).unwrap();
+        assert_eq!(
+            loaded.skills["delegated-skill"].original_agent_path,
+            Some("~/.claude/skills/delegated-skill".into())
+        );
+    }
+
+    #[test]
+    fn test_app_settings_scan_roundtrip() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("settings.toml");
+
+        let settings = AppSettings {
+            mcp: McpSettings::default(),
+            git_sync: GitSyncSettings::default(),
+            scan: ScanSettings {
+                auto_scan_on_startup: true,
+            },
+        };
+        settings.save(&path).unwrap();
+        let loaded = AppSettings::load(&path).unwrap();
+        assert!(loaded.scan.auto_scan_on_startup);
     }
 }

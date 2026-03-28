@@ -402,6 +402,243 @@ pub async fn update_skill(
     Ok(format!("Updated skill '{}'", name))
 }
 
+// --- Discovery & Delegation ---
+
+#[derive(Serialize)]
+pub struct DiscoveredSkillInfo {
+    pub name: String,
+    pub description: Option<String>,
+    pub agent_name: String,
+    pub found_path: String,
+    pub scope: String,
+    pub files: Vec<String>,
+    pub total_bytes: u64,
+    pub token_estimate: u64,
+    pub exists_in_registry: bool,
+}
+
+#[tauri::command]
+pub async fn scan_skills(state: State<'_, AppState>) -> Result<Vec<DiscoveredSkillInfo>, String> {
+    let dirs = &state.dirs;
+    let registry = Registry::new(dirs.clone());
+    let agents_config =
+        skills_core::AgentsConfig::load(&dirs.agents_toml()).map_err(|e| e.to_string())?;
+
+    let all_projects = state
+        .db
+        .list_all_projects()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let project_paths: Vec<String> = all_projects
+        .iter()
+        .filter(|p| p.path != GLOBAL_PROJECT_PATH)
+        .map(|p| p.path.clone())
+        .collect();
+
+    // Collect all placed skill paths from DB to exclude from discovery
+    let placed_paths = state
+        .db
+        .collect_placed_paths()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let discovered = skills_core::discovery::scan_all_agents(
+        dirs,
+        &registry,
+        &agents_config,
+        &project_paths,
+        &placed_paths,
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(discovered
+        .into_iter()
+        .map(|d| {
+            let scope = match &d.scope {
+                skills_core::discovery::DiscoveryScope::Global => "global".to_string(),
+                skills_core::discovery::DiscoveryScope::Project(p) => p.clone(),
+            };
+            DiscoveredSkillInfo {
+                name: d.name,
+                description: d.description,
+                agent_name: d.agent_name,
+                found_path: d.found_path.to_string_lossy().to_string(),
+                scope,
+                files: d.files,
+                total_bytes: d.total_bytes,
+                token_estimate: d.token_estimate,
+                exists_in_registry: d.exists_in_registry,
+            }
+        })
+        .collect())
+}
+
+#[derive(Deserialize)]
+pub struct DelegateRequest {
+    pub found_path: String,
+}
+
+#[tauri::command]
+pub async fn delegate_skills(
+    state: State<'_, AppState>,
+    skills: Vec<DelegateRequest>,
+    profile_name: String,
+    create_profile: bool,
+    profile_description: Option<String>,
+) -> Result<String, String> {
+    let dirs = &state.dirs;
+    let registry = Registry::new(dirs.clone());
+
+    // Validate or create profile BEFORE delegating any skills
+    let mut profiles_config =
+        ProfilesConfig::load(&dirs.profiles_toml()).map_err(|e| e.to_string())?;
+    if create_profile {
+        if profiles_config.profiles.contains_key(&profile_name) {
+            return Err(format!("Profile '{}' already exists", profile_name));
+        }
+        profiles_config.profiles.insert(
+            profile_name.clone(),
+            ProfileDef {
+                description: profile_description,
+                skills: vec![],
+                includes: vec![],
+            },
+        );
+        profiles_config
+            .save(&dirs.profiles_toml())
+            .map_err(|e| e.to_string())?;
+    } else if !profiles_config.profiles.contains_key(&profile_name) {
+        return Err(format!("Profile '{}' not found", profile_name));
+    }
+
+    let mut delegated = Vec::new();
+    let mut skipped = Vec::new();
+    for req in &skills {
+        let source_path = std::path::PathBuf::from(&req.found_path);
+        let skill_name = source_path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if registry.exists(&skill_name) {
+            skipped.push(skill_name);
+            continue;
+        }
+        match registry.delegate(&source_path, &req.found_path) {
+            Ok(name) => {
+                if let Some(profile) = profiles_config.profiles.get_mut(&profile_name) {
+                    if !profile.skills.contains(&name) {
+                        profile.skills.push(name.clone());
+                    }
+                    profiles_config
+                        .save(&dirs.profiles_toml())
+                        .map_err(|e| e.to_string())?;
+                }
+                delegated.push(name);
+            }
+            Err(e) => {
+                return Err(format!(
+                    "{}{}",
+                    e,
+                    if delegated.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            " ({} already imported and assigned: {})",
+                            delegated.len(),
+                            delegated.join(", ")
+                        )
+                    }
+                ));
+            }
+        }
+    }
+
+    let _ = logging::log(
+        &state.db,
+        LogEntry {
+            source: Source::Gui,
+            agent_name: None,
+            operation: "skill_delegate",
+            params: None,
+            project_path: None,
+            result: "success",
+            details: &format!(
+                "Delegated {} skill(s) to profile '{}'",
+                delegated.len(),
+                profile_name
+            ),
+        },
+    )
+    .await;
+
+    let mut msg = format!(
+        "Delegated {} skill(s) to profile '{}'",
+        delegated.len(),
+        profile_name
+    );
+    if !skipped.is_empty() {
+        msg.push_str(&format!(
+            " ({} already in registry: {})",
+            skipped.len(),
+            skipped.join(", ")
+        ));
+    }
+    Ok(msg)
+}
+
+#[tauri::command]
+pub async fn link_remote(
+    state: State<'_, AppState>,
+    name: String,
+    url: String,
+    subpath: Option<String>,
+    git_ref: String,
+) -> Result<String, String> {
+    let registry = Registry::new(state.dirs.clone());
+    registry
+        .link_remote(&name, &url, subpath.as_deref(), &git_ref)
+        .map_err(|e| e.to_string())?;
+
+    let _ = logging::log(
+        &state.db,
+        LogEntry {
+            source: Source::Gui,
+            agent_name: None,
+            operation: "skill_link_remote",
+            params: None,
+            project_path: None,
+            result: "success",
+            details: &format!("Linked '{}' to {}", name, url),
+        },
+    )
+    .await;
+
+    Ok(format!("Linked '{}' to remote: {}", name, url))
+}
+
+#[tauri::command]
+pub async fn unlink_remote(state: State<'_, AppState>, name: String) -> Result<String, String> {
+    let registry = Registry::new(state.dirs.clone());
+    registry.unlink_remote(&name).map_err(|e| e.to_string())?;
+
+    let _ = logging::log(
+        &state.db,
+        LogEntry {
+            source: Source::Gui,
+            agent_name: None,
+            operation: "skill_unlink_remote",
+            params: None,
+            project_path: None,
+            result: "success",
+            details: &format!("Unlinked '{}' from remote", name),
+        },
+    )
+    .await;
+
+    Ok(format!("Unlinked '{}' from remote", name))
+}
+
 // --- Profiles ---
 
 #[tauri::command]
@@ -1173,6 +1410,8 @@ pub struct SettingsPayload {
     pub mcp_transport: String,
     pub git_sync_enabled: bool,
     pub git_sync_repo_url: String,
+    #[serde(default)]
+    pub scan_auto_on_startup: bool,
 }
 
 #[tauri::command]
@@ -1184,6 +1423,7 @@ pub async fn get_settings(state: State<'_, AppState>) -> Result<SettingsPayload,
         mcp_transport: settings.mcp.transport,
         git_sync_enabled: settings.git_sync.enabled,
         git_sync_repo_url: settings.git_sync.repo_url,
+        scan_auto_on_startup: settings.scan.auto_scan_on_startup,
     })
 }
 
@@ -1198,6 +1438,7 @@ pub async fn save_settings(
     settings.mcp.transport = payload.mcp_transport;
     settings.git_sync.enabled = payload.git_sync_enabled;
     settings.git_sync.repo_url = payload.git_sync_repo_url;
+    settings.scan.auto_scan_on_startup = payload.scan_auto_on_startup;
     settings
         .save(&state.dirs.settings_toml())
         .map_err(|e| e.to_string())?;
