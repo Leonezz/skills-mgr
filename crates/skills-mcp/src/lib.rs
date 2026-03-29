@@ -210,16 +210,21 @@ impl SkillsMcpServer {
             },
             {
                 "name": "add_agent",
-                "description": "Add a new agent configuration",
+                "description": "Add a new agent configuration. If project_path/global_path are omitted, uses built-in presets for known agents (claude-code, cursor, windsurf, codex, copilot, gemini).",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "name": { "type": "string" },
-                        "project_path": { "type": "string" },
-                        "global_path": { "type": "string" }
+                        "name": { "type": "string", "description": "Agent name (e.g. claude-code, cursor)" },
+                        "project_path": { "type": "string", "description": "Relative project skill path (optional for known agents)" },
+                        "global_path": { "type": "string", "description": "Absolute global skill path (optional for known agents)" }
                     },
-                    "required": ["name", "project_path", "global_path"]
+                    "required": ["name"]
                 }
+            },
+            {
+                "name": "list_agent_presets",
+                "description": "List all known agent presets with their default paths",
+                "inputSchema": { "type": "object", "properties": {} }
             },
             {
                 "name": "activate_profile",
@@ -229,7 +234,8 @@ impl SkillsMcpServer {
                     "properties": {
                         "name": { "type": "string" },
                         "project_path": { "type": "string" },
-                        "force": { "type": "boolean" }
+                        "force": { "type": "boolean" },
+                        "dry_run": { "type": "boolean", "description": "Preview without making changes" }
                     },
                     "required": ["name", "project_path"]
                 }
@@ -241,7 +247,8 @@ impl SkillsMcpServer {
                     "type": "object",
                     "properties": {
                         "name": { "type": "string" },
-                        "project_path": { "type": "string" }
+                        "project_path": { "type": "string" },
+                        "dry_run": { "type": "boolean", "description": "Preview without making changes" }
                     },
                     "required": ["name", "project_path"]
                 }
@@ -447,21 +454,44 @@ impl SkillsMcpServer {
                 Ok(serde_json::to_string_pretty(&config)?)
             }
             "add_agent" => {
-                let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                let project_path = args
-                    .get("project_path")
+                let name = args
+                    .get("name")
                     .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let global_path = args
-                    .get("global_path")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                    .context("name required")?;
+                let explicit_pp = args.get("project_path").and_then(|v| v.as_str());
+                let explicit_gp = args.get("global_path").and_then(|v| v.as_str());
+
+                let (project_path, global_path) = match (explicit_pp, explicit_gp) {
+                    (Some(pp), Some(gp)) => (pp.to_string(), gp.to_string()),
+                    (pp, gp) => {
+                        if let Some(preset) = skills_core::lookup_preset(name) {
+                            (
+                                pp.map(String::from)
+                                    .unwrap_or_else(|| preset.project_path.to_string()),
+                                gp.map(String::from)
+                                    .unwrap_or_else(|| preset.global_path.to_string()),
+                            )
+                        } else {
+                            anyhow::bail!(
+                                "Unknown agent '{}'. Provide project_path and global_path, \
+                                 or use a known agent: {}",
+                                name,
+                                skills_core::KNOWN_AGENTS
+                                    .iter()
+                                    .map(|p| p.name)
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            );
+                        }
+                    }
+                };
+
                 let mut config = AgentsConfig::load(&self.dirs.agents_toml())?;
                 config.agents.insert(
                     name.to_string(),
                     AgentDef {
-                        project_path: project_path.to_string(),
-                        global_path: global_path.to_string(),
+                        project_path,
+                        global_path,
                         enabled: true,
                     },
                 );
@@ -481,6 +511,19 @@ impl SkillsMcpServer {
                 .await;
                 Ok(format!("Added agent '{}'", name))
             }
+            "list_agent_presets" => {
+                let presets: Vec<Value> = skills_core::KNOWN_AGENTS
+                    .iter()
+                    .map(|p| {
+                        json!({
+                            "name": p.name,
+                            "project_path": p.project_path,
+                            "global_path": p.global_path,
+                        })
+                    })
+                    .collect();
+                Ok(serde_json::to_string_pretty(&presets)?)
+            }
             "activate_profile" => {
                 let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
                 let project_path = args
@@ -488,38 +531,75 @@ impl SkillsMcpServer {
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
                 let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
+                let dry_run = args
+                    .get("dry_run")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
                 let profiles_config = ProfilesConfig::load(&self.dirs.profiles_toml())?;
                 let agents_config = AgentsConfig::load(&self.dirs.agents_toml())?;
-                let result = skills_core::placements::activate(
-                    &self.dirs,
-                    &self.db,
-                    &profiles_config,
-                    &agents_config,
-                    name,
-                    project_path,
-                    force,
-                )
-                .await?;
-                let _ = logging::log(
-                    &self.db,
-                    LogEntry {
-                        source: Source::Mcp,
-                        agent_name: None,
-                        operation: "profile_activate",
-                        params: None,
-                        project_path: Some(project_path),
-                        result: "success",
-                        details: &format!(
-                            "Activated '{}': {} placements",
-                            name, result.total_placements
-                        ),
-                    },
-                )
-                .await;
-                Ok(format!(
-                    "Activated '{}': {} skills, {} placements",
-                    result.profile_name, result.skills_placed, result.total_placements
-                ))
+
+                if dry_run {
+                    let result = skills_core::placements::dry_run_activate(
+                        &self.dirs,
+                        &self.db,
+                        &profiles_config,
+                        &agents_config,
+                        name,
+                        project_path,
+                        force,
+                    )
+                    .await?;
+                    let ops: Vec<Value> = result
+                        .operations
+                        .iter()
+                        .map(|op| {
+                            json!({
+                                "skill": op.skill_name,
+                                "agent": op.agent_name,
+                                "target": op.target_path,
+                                "action": format!("{:?}", op.action),
+                            })
+                        })
+                        .collect();
+                    Ok(serde_json::to_string_pretty(&json!({
+                        "dry_run": true,
+                        "profile": result.profile_name,
+                        "skills": result.skills_resolved,
+                        "agents": result.agents_used,
+                        "operations": ops,
+                    }))?)
+                } else {
+                    let result = skills_core::placements::activate(
+                        &self.dirs,
+                        &self.db,
+                        &profiles_config,
+                        &agents_config,
+                        name,
+                        project_path,
+                        force,
+                    )
+                    .await?;
+                    let _ = logging::log(
+                        &self.db,
+                        LogEntry {
+                            source: Source::Mcp,
+                            agent_name: None,
+                            operation: "profile_activate",
+                            params: None,
+                            project_path: Some(project_path),
+                            result: "success",
+                            details: &format!(
+                                "Activated '{}': {} placements",
+                                name, result.total_placements
+                            ),
+                        },
+                    )
+                    .await;
+                    Ok(format!(
+                        "Activated '{}': {} skills, {} placements",
+                        result.profile_name, result.skills_placed, result.total_placements
+                    ))
+                }
             }
             "deactivate_profile" => {
                 let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
@@ -527,25 +607,54 @@ impl SkillsMcpServer {
                     .get("project_path")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                let result =
-                    skills_core::placements::deactivate(&self.db, name, project_path).await?;
-                let _ = logging::log(
-                    &self.db,
-                    LogEntry {
-                        source: Source::Mcp,
-                        agent_name: None,
-                        operation: "profile_deactivate",
-                        params: None,
-                        project_path: Some(project_path),
-                        result: "success",
-                        details: &format!("Deactivated '{}'", name),
-                    },
-                )
-                .await;
-                Ok(format!(
-                    "Deactivated '{}': {} removed, {} kept",
-                    result.profile_name, result.files_removed, result.files_kept
-                ))
+                let dry_run = args
+                    .get("dry_run")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+
+                if dry_run {
+                    let result =
+                        skills_core::placements::dry_run_deactivate(&self.db, name, project_path)
+                            .await?;
+                    let format_ops =
+                        |ops: &[skills_core::placements::PlannedOperation]| -> Vec<Value> {
+                            ops.iter()
+                                .map(|op| {
+                                    json!({
+                                        "skill": op.skill_name,
+                                        "agent": op.agent_name,
+                                        "target": op.target_path,
+                                    })
+                                })
+                                .collect()
+                        };
+                    Ok(serde_json::to_string_pretty(&json!({
+                        "dry_run": true,
+                        "profile": result.profile_name,
+                        "would_remove": format_ops(&result.would_remove),
+                        "would_keep": format_ops(&result.would_keep),
+                    }))?)
+                } else {
+                    let result =
+                        skills_core::placements::deactivate(&self.db, name, project_path).await?;
+                    let _ = logging::log(
+                        &self.db,
+                        LogEntry {
+                            source: Source::Mcp,
+                            agent_name: None,
+                            operation: "profile_deactivate",
+                            params: None,
+                            project_path: Some(project_path),
+                            result: "success",
+                            details: &format!("Deactivated '{}'", name),
+                        },
+                    )
+                    .await;
+                    Ok(format!(
+                        "Deactivated '{}': {} removed, {} kept",
+                        result.profile_name, result.files_removed, result.files_kept
+                    ))
+                }
             }
             "global_status" => {
                 let config = ProfilesConfig::load(&self.dirs.profiles_toml())?;
