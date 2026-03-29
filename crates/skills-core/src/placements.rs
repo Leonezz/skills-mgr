@@ -650,6 +650,32 @@ pub async fn dry_run_switch(
     })
 }
 
+/// Re-copy a skill to all active placements after a registry update.
+///
+/// Queries all projects for placements of this skill and re-copies from
+/// the registry to each target path.
+pub async fn replace_skill(dirs: &AppDirs, db: &Database, skill_name: &str) -> Result<usize> {
+    let projects = db.list_all_projects().await?;
+    let mut replaced = 0;
+
+    for project in &projects {
+        let placements = db.get_all_placements_for_project(project.id).await?;
+        for placement in &placements {
+            if placement.skill_name == skill_name {
+                let src = dirs.registry().join(skill_name);
+                let dst = std::path::PathBuf::from(&placement.target_path);
+                if dst.exists() {
+                    std::fs::remove_dir_all(&dst)?;
+                }
+                registry::copy_dir_recursive(&src, &dst)?;
+                replaced += 1;
+            }
+        }
+    }
+
+    Ok(replaced)
+}
+
 /// Get status for a project — active profiles and placement count.
 pub async fn status(
     db: &Database,

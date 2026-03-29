@@ -60,6 +60,8 @@ pub fn run() {
             commands::remove_skill,
             commands::read_skill_content,
             commands::update_skill,
+            commands::sync_skill,
+            commands::sync_all_skills,
             commands::list_profiles,
             commands::create_profile,
             commands::edit_profile,
