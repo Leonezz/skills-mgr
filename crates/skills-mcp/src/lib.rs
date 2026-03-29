@@ -254,6 +254,21 @@ impl SkillsMcpServer {
                 }
             },
             {
+                "name": "switch_profile",
+                "description": "Atomically switch from current active profile(s) to a new one using diff-based semantics",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string", "description": "New profile to activate" },
+                        "project_path": { "type": "string" },
+                        "from": { "type": "string", "description": "Explicit old profile to switch from (optional, default: all active)" },
+                        "force": { "type": "boolean" },
+                        "dry_run": { "type": "boolean", "description": "Preview without making changes" }
+                    },
+                    "required": ["name", "project_path"]
+                }
+            },
+            {
                 "name": "global_status",
                 "description": "Get global skills status",
                 "inputSchema": { "type": "object", "properties": {} }
@@ -653,6 +668,80 @@ impl SkillsMcpServer {
                     Ok(format!(
                         "Deactivated '{}': {} removed, {} kept",
                         result.profile_name, result.files_removed, result.files_kept
+                    ))
+                }
+            }
+            "switch_profile" => {
+                let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let project_path = args
+                    .get("project_path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let from = args.get("from").and_then(|v| v.as_str());
+                let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
+                let dry_run = args
+                    .get("dry_run")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let profiles_config = ProfilesConfig::load(&self.dirs.profiles_toml())?;
+                let agents_config = AgentsConfig::load(&self.dirs.agents_toml())?;
+
+                if dry_run {
+                    let result = skills_core::placements::dry_run_switch(
+                        &self.dirs,
+                        &self.db,
+                        &profiles_config,
+                        &agents_config,
+                        name,
+                        project_path,
+                        from,
+                    )
+                    .await?;
+                    Ok(serde_json::to_string_pretty(&json!({
+                        "dry_run": true,
+                        "old_profiles": result.old_profiles,
+                        "new_profile": result.new_profile,
+                        "to_add": result.to_add,
+                        "to_remove": result.to_remove,
+                        "to_keep": result.to_keep,
+                    }))?)
+                } else {
+                    let result = skills_core::placements::switch_profile(
+                        &self.dirs,
+                        &self.db,
+                        &profiles_config,
+                        &agents_config,
+                        name,
+                        project_path,
+                        from,
+                        force,
+                    )
+                    .await?;
+                    let _ = logging::log(
+                        &self.db,
+                        LogEntry {
+                            source: Source::Mcp,
+                            agent_name: None,
+                            operation: "profile_switch",
+                            params: None,
+                            project_path: Some(project_path),
+                            result: "success",
+                            details: &format!(
+                                "Switched to '{}': +{} -{} ~{}",
+                                name,
+                                result.skills_added,
+                                result.skills_removed,
+                                result.skills_kept
+                            ),
+                        },
+                    )
+                    .await;
+                    Ok(format!(
+                        "Switched to '{}': +{} added, ~{} kept, -{} removed",
+                        result.new_profile,
+                        result.skills_added,
+                        result.skills_kept,
+                        result.skills_removed
                     ))
                 }
             }

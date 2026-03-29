@@ -168,6 +168,15 @@ pub enum ProfileAction {
         name: String,
         #[arg(long)]
         project: Option<String>,
+        /// Explicit old profile to switch from (default: all active)
+        #[arg(long)]
+        from: Option<String>,
+        /// Force overwrite on conflicts
+        #[arg(long)]
+        force: bool,
+        /// Preview what would happen without making changes
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 

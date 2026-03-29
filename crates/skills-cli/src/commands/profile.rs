@@ -242,44 +242,73 @@ pub async fn run(dirs: &AppDirs, db: &Database, action: ProfileAction) -> Result
                 .await?;
             }
         }
-        ProfileAction::Switch { name, project } => {
+        ProfileAction::Switch {
+            name,
+            project,
+            from,
+            force,
+            dry_run,
+        } => {
             let project_path = resolve_project_path(project)?;
-            let project_id = db.get_or_create_project(&project_path, None).await?;
-            let active = db.get_active_profiles(project_id).await?;
-
-            // Deactivate all current profiles (except base)
-            for p in &active {
-                placements::deactivate(db, p, &project_path).await?;
+            if dry_run {
+                let result = placements::dry_run_switch(
+                    dirs,
+                    db,
+                    &profiles_config,
+                    &agents_config,
+                    &name,
+                    &project_path,
+                    from.as_deref(),
+                )
+                .await?;
+                println!("Dry run: switch to '{}' for {}", name, project_path);
+                if !result.old_profiles.is_empty() {
+                    println!("  From: {}", result.old_profiles.join(", "));
+                }
+                if !result.to_add.is_empty() {
+                    println!("  Add: {}", result.to_add.join(", "));
+                }
+                if !result.to_keep.is_empty() {
+                    println!("  Keep: {}", result.to_keep.join(", "));
+                }
+                if !result.to_remove.is_empty() {
+                    println!("  Remove: {}", result.to_remove.join(", "));
+                }
+                print_planned_operations(&result.operations);
+            } else {
+                let result = placements::switch_profile(
+                    dirs,
+                    db,
+                    &profiles_config,
+                    &agents_config,
+                    &name,
+                    &project_path,
+                    from.as_deref(),
+                    force,
+                )
+                .await?;
+                println!(
+                    "Switched to '{}': +{} added, ~{} kept, -{} removed ({} placements)",
+                    result.new_profile,
+                    result.skills_added,
+                    result.skills_kept,
+                    result.skills_removed,
+                    result.total_placements
+                );
+                logging::log(
+                    db,
+                    LogEntry {
+                        source: Source::Cli,
+                        agent_name: None,
+                        operation: "profile_switch",
+                        params: None,
+                        project_path: Some(&project_path),
+                        result: "success",
+                        details: &format!("Switched to '{}'", name),
+                    },
+                )
+                .await?;
             }
-
-            // Activate new profile
-            let result = placements::activate(
-                dirs,
-                db,
-                &profiles_config,
-                &agents_config,
-                &name,
-                &project_path,
-                false,
-            )
-            .await?;
-            println!(
-                "Switched to profile '{}' ({} placements)",
-                result.profile_name, result.total_placements
-            );
-            logging::log(
-                db,
-                LogEntry {
-                    source: Source::Cli,
-                    agent_name: None,
-                    operation: "profile_switch",
-                    params: None,
-                    project_path: Some(&project_path),
-                    result: "success",
-                    details: &format!("Switched to '{}'", name),
-                },
-            )
-            .await?;
         }
     }
 
