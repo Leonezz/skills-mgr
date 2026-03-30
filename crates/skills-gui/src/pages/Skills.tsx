@@ -19,7 +19,7 @@ import {
   SheetBody,
   SheetFooter,
 } from "@/components/ui/sheet"
-import { listSkills, createSkill, removeSkill, importSkill, importRemoteSkill, browseRemote, importFromBrowse, openSkillDir, updateSkill, scanSkills, delegateSkills, linkRemote, unlinkRemote, listProfiles } from "@/lib/api"
+import { listSkills, createSkill, removeSkill, importSkill, importRemoteSkill, browseRemote, importFromBrowse, openSkillDir, updateSkill, syncSkill, syncAllSkills, scanSkills, delegateSkills, linkRemote, unlinkRemote, listProfiles } from "@/lib/api"
 import type { RemoteSkillEntry, DelegateRequest } from "@/lib/api"
 import { open } from "@tauri-apps/plugin-dialog"
 import { toast } from "sonner"
@@ -35,6 +35,7 @@ import {
   Check,
   ExternalLink,
   AlertTriangle,
+  RefreshCw,
 } from "lucide-react"
 import type { Skill, DiscoveredSkill } from "@/lib/schemas"
 import { formatTokens, formatBytes } from "@/lib/format"
@@ -235,6 +236,24 @@ export function Skills() {
     onError: (err) => toast.error(String(err)),
   })
 
+  const syncMutation = useMutation({
+    mutationFn: (name: string) => syncSkill(name),
+    onSuccess: (msg) => {
+      toast.success(msg)
+      queryClient.invalidateQueries({ queryKey: ["skills"] })
+    },
+    onError: (err) => toast.error(String(err)),
+  })
+
+  const syncAllMutation = useMutation({
+    mutationFn: () => syncAllSkills(),
+    onSuccess: (msg) => {
+      toast.success(msg)
+      queryClient.invalidateQueries({ queryKey: ["skills"] })
+    },
+    onError: (err) => toast.error(String(err)),
+  })
+
   function closeDelegateDialog() {
     setShowDelegate(false)
     setDelegateSelected(new Set())
@@ -345,10 +364,22 @@ export function Skills() {
               Manage your skill collection
             </p>
           </div>
-          <Button onClick={() => setShowAdd(true)}>
-            <Plus className="h-4 w-4" />
-            Add Skill
-          </Button>
+          <div className="flex items-center gap-2">
+            {skills?.some((s) => s.source_type === "git") && (
+              <Button
+                variant="outline"
+                onClick={() => syncAllMutation.mutate()}
+                disabled={syncAllMutation.isPending}
+              >
+                <RefreshCw className={`h-4 w-4 ${syncAllMutation.isPending ? "animate-spin" : ""}`} />
+                {syncAllMutation.isPending ? "Syncing..." : "Sync All"}
+              </Button>
+            )}
+            <Button onClick={() => setShowAdd(true)}>
+              <Plus className="h-4 w-4" />
+              Add Skill
+            </Button>
+          </div>
         </div>
 
         {/* Search */}
@@ -830,19 +861,32 @@ export function Skills() {
               Open in Finder
             </Button>
             {detail?.source_type === "git" ? (
-              <Button
-                variant="outline"
-                className="shrink-0"
-                onClick={() => {
-                  if (detail) {
-                    unlinkRemoteMutation.mutate(detail.name)
-                  }
-                }}
-                disabled={unlinkRemoteMutation.isPending}
-              >
-                <Globe className="h-4 w-4" />
-                {unlinkRemoteMutation.isPending ? "Unlinking..." : "Unlink Remote"}
-              </Button>
+              <>
+                <Button
+                  variant="outline"
+                  className="shrink-0"
+                  onClick={() => {
+                    if (detail) syncMutation.mutate(detail.name)
+                  }}
+                  disabled={syncMutation.isPending}
+                >
+                  <RefreshCw className={`h-4 w-4 ${syncMutation.isPending ? "animate-spin" : ""}`} />
+                  {syncMutation.isPending ? "Syncing..." : "Sync"}
+                </Button>
+                <Button
+                  variant="outline"
+                  className="shrink-0"
+                  onClick={() => {
+                    if (detail) {
+                      unlinkRemoteMutation.mutate(detail.name)
+                    }
+                  }}
+                  disabled={unlinkRemoteMutation.isPending}
+                >
+                  <Globe className="h-4 w-4" />
+                  {unlinkRemoteMutation.isPending ? "Unlinking..." : "Unlink Remote"}
+                </Button>
+              </>
             ) : (
               <Button
                 variant="outline"
