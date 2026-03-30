@@ -66,6 +66,7 @@ pub fn run() {
             commands::delete_profile,
             commands::list_agents,
             commands::add_agent,
+            commands::list_agent_presets,
             commands::edit_agent,
             commands::remove_agent,
             commands::toggle_agent,

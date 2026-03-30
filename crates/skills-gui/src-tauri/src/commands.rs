@@ -816,15 +816,38 @@ pub async fn list_agents(state: State<'_, AppState>) -> Result<Vec<AgentInfo>, S
 pub async fn add_agent(
     state: State<'_, AppState>,
     name: String,
-    project_path: String,
-    global_path: String,
+    project_path: Option<String>,
+    global_path: Option<String>,
 ) -> Result<String, String> {
+    let (pp, gp) = match (project_path, global_path) {
+        (Some(pp), Some(gp)) => (pp, gp),
+        (pp, gp) => {
+            if let Some(preset) = skills_core::lookup_preset(&name) {
+                (
+                    pp.unwrap_or_else(|| preset.project_path.to_string()),
+                    gp.unwrap_or_else(|| preset.global_path.to_string()),
+                )
+            } else {
+                return Err(format!(
+                    "Unknown agent '{}'. Provide project_path and global_path, \
+                     or use a known agent: {}",
+                    name,
+                    skills_core::KNOWN_AGENTS
+                        .iter()
+                        .map(|p| p.name)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+        }
+    };
+
     let mut config = AgentsConfig::load(&state.dirs.agents_toml()).map_err(|e| e.to_string())?;
     config.agents.insert(
         name.clone(),
         AgentDef {
-            project_path,
-            global_path,
+            project_path: pp,
+            global_path: gp,
             enabled: true,
         },
     );
@@ -845,6 +868,20 @@ pub async fn add_agent(
     )
     .await;
     Ok(format!("Added agent '{}'", name))
+}
+
+#[tauri::command]
+pub async fn list_agent_presets() -> Result<Vec<serde_json::Value>, String> {
+    Ok(skills_core::KNOWN_AGENTS
+        .iter()
+        .map(|p| {
+            serde_json::json!({
+                "name": p.name,
+                "project_path": p.project_path,
+                "global_path": p.global_path,
+            })
+        })
+        .collect())
 }
 
 #[tauri::command]

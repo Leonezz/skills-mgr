@@ -23,6 +23,202 @@ pub struct DeactivationResult {
     pub files_kept: usize,
 }
 
+/// A single planned placement action for dry-run previews.
+#[derive(Debug, Clone)]
+pub struct PlannedOperation {
+    pub skill_name: String,
+    pub agent_name: String,
+    pub target_path: String,
+    pub action: PlannedAction,
+}
+
+/// The action that would be taken for a placement.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PlannedAction {
+    /// New placement — skill will be copied
+    Copy,
+    /// Skill already placed by same profile — just link
+    Link,
+    /// Different skill at same path — force overwrite
+    Overwrite,
+}
+
+/// Result of a dry-run activation — shows what would happen without executing.
+#[derive(Debug)]
+pub struct DryRunActivateResult {
+    pub profile_name: String,
+    pub skills_resolved: Vec<String>,
+    pub agents_used: Vec<String>,
+    pub operations: Vec<PlannedOperation>,
+}
+
+/// Result of a dry-run deactivation — shows what would be removed.
+#[derive(Debug)]
+pub struct DryRunDeactivateResult {
+    pub profile_name: String,
+    pub would_remove: Vec<PlannedOperation>,
+    pub would_keep: Vec<PlannedOperation>,
+}
+
+/// Internal planned placement used during activation.
+struct PlannedPlacement {
+    skill_name: String,
+    agent_name: String,
+    target_path: String,
+    action: PlannedAction,
+}
+
+/// Plan an activation without executing it. Used by both `activate` and `dry_run_activate`.
+async fn plan_activation(
+    dirs: &AppDirs,
+    db: &Database,
+    profiles_config: &ProfilesConfig,
+    agents_config: &AgentsConfig,
+    profile_name: &str,
+    project_path: &str,
+    force: bool,
+) -> Result<(
+    i64,
+    Vec<String>,
+    Vec<(String, String)>,
+    Vec<PlannedPlacement>,
+)> {
+    let skills = profiles::resolve_profile(profiles_config, profile_name, true)?;
+
+    let project_name = Path::new(project_path)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string());
+    let project_id = db
+        .get_or_create_project(project_path, project_name.as_deref())
+        .await?;
+
+    let agents: Vec<(String, String)> = agents_config
+        .agents
+        .iter()
+        .filter(|(_, def)| def.enabled)
+        .map(|(name, def)| (name.clone(), def.project_path.clone()))
+        .collect();
+
+    if agents.is_empty() {
+        bail!("No agents configured. Run `skills-mgr agent add <name>` first.");
+    }
+
+    let mut planned: Vec<PlannedPlacement> = Vec::new();
+    for skill_name in &skills {
+        if !dirs.registry().join(skill_name).join("SKILL.md").exists() {
+            bail!("Skill '{}' not found in registry", skill_name);
+        }
+
+        for (agent_name, agent_project_path) in &agents {
+            let target = PathBuf::from(project_path)
+                .join(agent_project_path)
+                .join(skill_name);
+            let target_str = target.to_string_lossy().to_string();
+
+            let action = if let Some(existing) = db.find_conflict(project_id, &target_str).await? {
+                if existing.skill_name == *skill_name {
+                    PlannedAction::Link
+                } else if force {
+                    PlannedAction::Overwrite
+                } else {
+                    bail!(
+                        "Conflict: target path {} already occupied by skill '{}'. Use --force to overwrite.",
+                        target_str,
+                        existing.skill_name
+                    );
+                }
+            } else {
+                PlannedAction::Copy
+            };
+
+            planned.push(PlannedPlacement {
+                skill_name: skill_name.clone(),
+                agent_name: agent_name.clone(),
+                target_path: target_str,
+                action,
+            });
+        }
+    }
+
+    Ok((project_id, skills, agents, planned))
+}
+
+/// Preview what an activation would do without making any changes.
+pub async fn dry_run_activate(
+    dirs: &AppDirs,
+    db: &Database,
+    profiles_config: &ProfilesConfig,
+    agents_config: &AgentsConfig,
+    profile_name: &str,
+    project_path: &str,
+    force: bool,
+) -> Result<DryRunActivateResult> {
+    let (_project_id, skills, agents, planned) = plan_activation(
+        dirs,
+        db,
+        profiles_config,
+        agents_config,
+        profile_name,
+        project_path,
+        force,
+    )
+    .await?;
+
+    let operations = planned
+        .into_iter()
+        .map(|p| PlannedOperation {
+            skill_name: p.skill_name,
+            agent_name: p.agent_name,
+            target_path: p.target_path,
+            action: p.action,
+        })
+        .collect();
+
+    Ok(DryRunActivateResult {
+        profile_name: profile_name.to_string(),
+        skills_resolved: skills,
+        agents_used: agents.into_iter().map(|(n, _)| n).collect(),
+        operations,
+    })
+}
+
+/// Preview what a deactivation would do without making any changes.
+pub async fn dry_run_deactivate(
+    db: &Database,
+    profile_name: &str,
+    project_path: &str,
+) -> Result<DryRunDeactivateResult> {
+    let project_id = db.get_or_create_project(project_path, None).await?;
+    let placements = db
+        .get_placements_for_project_profile(project_id, profile_name)
+        .await?;
+
+    let mut would_remove = Vec::new();
+    let mut would_keep = Vec::new();
+
+    for placement in &placements {
+        let remaining = db.get_placement_profile_count(placement.id).await?;
+        let op = PlannedOperation {
+            skill_name: placement.skill_name.clone(),
+            agent_name: placement.agent_name.clone(),
+            target_path: placement.target_path.clone(),
+            action: PlannedAction::Copy, // reused as a label; the action field is informational
+        };
+        // remaining includes current profile, so if only 1 remains it would be removed
+        if remaining <= 1 {
+            would_remove.push(op);
+        } else {
+            would_keep.push(op);
+        }
+    }
+
+    Ok(DryRunDeactivateResult {
+        profile_name: profile_name.to_string(),
+        would_remove,
+        would_keep,
+    })
+}
+
 /// Activate a profile for a project.
 ///
 /// 1. Resolve skills (profile + base)
@@ -39,73 +235,27 @@ pub async fn activate(
     project_path: &str,
     force: bool,
 ) -> Result<ActivationResult> {
-    // Resolve skills
-    let skills = profiles::resolve_profile(profiles_config, profile_name, true)?;
+    let (project_id, skills, agents, planned) = plan_activation(
+        dirs,
+        db,
+        profiles_config,
+        agents_config,
+        profile_name,
+        project_path,
+        force,
+    )
+    .await?;
 
-    // Get or create project
-    let project_name = Path::new(project_path)
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string());
-    let project_id = db
-        .get_or_create_project(project_path, project_name.as_deref())
-        .await?;
-
-    // Determine which agents to place into (skip disabled)
-    let agents: Vec<(String, String)> = agents_config
-        .agents
-        .iter()
-        .filter(|(_, def)| def.enabled)
-        .map(|(name, def)| (name.clone(), def.project_path.clone()))
-        .collect();
-
-    if agents.is_empty() {
-        bail!("No agents configured. Run `skills-mgr agent add <name>` first.");
-    }
-
-    // Compute all placements and check conflicts
-    struct PlannedPlacement {
-        skill_name: String,
-        agent_name: String,
-        target_path: String,
-    }
-
-    let mut planned: Vec<PlannedPlacement> = Vec::new();
-    for skill_name in &skills {
-        // Check skill exists in registry
-        if !dirs.registry().join(skill_name).join("SKILL.md").exists() {
-            bail!("Skill '{}' not found in registry", skill_name);
-        }
-
-        for (agent_name, agent_project_path) in &agents {
-            let target = PathBuf::from(project_path)
-                .join(agent_project_path)
-                .join(skill_name);
-            let target_str = target.to_string_lossy().to_string();
-
-            // Check for conflicts
-            if let Some(existing) = db.find_conflict(project_id, &target_str).await? {
-                if existing.skill_name == *skill_name {
-                    // Same skill — just add profile link, no conflict
-                } else if force {
-                    // Different skill at same path — force overwrite
-                    db.delete_placement(existing.id).await?;
-                    if target.exists() {
-                        std::fs::remove_dir_all(&target)?;
-                    }
-                } else {
-                    bail!(
-                        "Conflict: target path {} already occupied by skill '{}'. Use --force to overwrite.",
-                        target_str,
-                        existing.skill_name
-                    );
-                }
+    // Handle force-overwrite DB cleanup before copying
+    for p in &planned {
+        if p.action == PlannedAction::Overwrite
+            && let Some(existing) = db.find_conflict(project_id, &p.target_path).await?
+        {
+            db.delete_placement(existing.id).await?;
+            let target = PathBuf::from(&p.target_path);
+            if target.exists() {
+                std::fs::remove_dir_all(&target)?;
             }
-
-            planned.push(PlannedPlacement {
-                skill_name: skill_name.clone(),
-                agent_name: agent_name.clone(),
-                target_path: target_str,
-            });
         }
     }
 
@@ -116,16 +266,13 @@ pub async fn activate(
         let dst = PathBuf::from(&p.target_path);
 
         // Skip if already placed (same skill deduplicated)
-        if dst.exists() {
-            // Check if it's the same skill by seeing if we already placed it
-            if let Some(existing) = db.find_conflict(project_id, &p.target_path).await?
-                && existing.skill_name == p.skill_name
-            {
-                // Just link the profile, don't re-copy
-                let pid = existing.id;
-                db.link_placement_profile(pid, profile_name).await?;
-                continue;
-            }
+        if p.action == PlannedAction::Link
+            && let Some(existing) = db.find_conflict(project_id, &p.target_path).await?
+            && existing.skill_name == p.skill_name
+        {
+            let pid = existing.id;
+            db.link_placement_profile(pid, profile_name).await?;
+            continue;
         }
 
         if let Err(e) = registry::copy_dir_recursive(&src, &dst) {
@@ -145,6 +292,9 @@ pub async fn activate(
 
     // Record in DB
     for p in &planned {
+        if p.action == PlannedAction::Link {
+            continue; // already linked above
+        }
         let placement_id = db
             .insert_placement(project_id, &p.skill_name, &p.agent_name, &p.target_path)
             .await?;

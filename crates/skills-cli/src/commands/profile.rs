@@ -2,7 +2,7 @@ use crate::ProfileAction;
 use anyhow::Result;
 use skills_core::config::{AgentsConfig, ProfileDef, ProfilesConfig};
 use skills_core::logging::{self, LogEntry, Source};
-use skills_core::placements;
+use skills_core::placements::{self, PlannedAction};
 use skills_core::profiles;
 use skills_core::{AppDirs, Database};
 
@@ -124,69 +124,123 @@ pub async fn run(dirs: &AppDirs, db: &Database, action: ProfileAction) -> Result
             project,
             global: _,
             force,
+            dry_run,
         } => {
             let project_path = resolve_project_path(project)?;
-            let result = placements::activate(
-                dirs,
-                db,
-                &profiles_config,
-                &agents_config,
-                &name,
-                &project_path,
-                force,
-            )
-            .await?;
-            println!(
-                "Activated profile '{}' for {}",
-                result.profile_name, project_path
-            );
-            println!(
-                "  {} skills -> {} ({} placements)",
-                result.skills_placed,
-                result.agents_used.join(", "),
-                result.total_placements
-            );
-            logging::log(
-                db,
-                LogEntry {
-                    source: Source::Cli,
-                    agent_name: None,
-                    operation: "profile_activate",
-                    params: None,
-                    project_path: Some(&project_path),
-                    result: "success",
-                    details: &format!(
-                        "Activated '{}': {} placements",
-                        name, result.total_placements
-                    ),
-                },
-            )
-            .await?;
+            if dry_run {
+                let result = placements::dry_run_activate(
+                    dirs,
+                    db,
+                    &profiles_config,
+                    &agents_config,
+                    &name,
+                    &project_path,
+                    force,
+                )
+                .await?;
+                println!(
+                    "Dry run: activate '{}' for {}",
+                    result.profile_name, project_path
+                );
+                println!(
+                    "  Skills: {} | Agents: {}",
+                    result.skills_resolved.join(", "),
+                    result.agents_used.join(", ")
+                );
+                print_planned_operations(&result.operations);
+            } else {
+                let result = placements::activate(
+                    dirs,
+                    db,
+                    &profiles_config,
+                    &agents_config,
+                    &name,
+                    &project_path,
+                    force,
+                )
+                .await?;
+                println!(
+                    "Activated profile '{}' for {}",
+                    result.profile_name, project_path
+                );
+                println!(
+                    "  {} skills -> {} ({} placements)",
+                    result.skills_placed,
+                    result.agents_used.join(", "),
+                    result.total_placements
+                );
+                logging::log(
+                    db,
+                    LogEntry {
+                        source: Source::Cli,
+                        agent_name: None,
+                        operation: "profile_activate",
+                        params: None,
+                        project_path: Some(&project_path),
+                        result: "success",
+                        details: &format!(
+                            "Activated '{}': {} placements",
+                            name, result.total_placements
+                        ),
+                    },
+                )
+                .await?;
+            }
         }
         ProfileAction::Deactivate {
             name,
             project,
             global: _,
+            dry_run,
         } => {
             let project_path = resolve_project_path(project)?;
-            let result = placements::deactivate(db, &name, &project_path).await?;
-            println!(
-                "Deactivated profile '{}': {} removed, {} kept",
-                result.profile_name, result.files_removed, result.files_kept
-            );
-            logging::log(
-                db,
-                LogEntry {
-                    source: Source::Cli,
-                    agent_name: None,
-                    operation: "profile_deactivate",
-                    params: None,
-                    project_path: Some(&project_path),
-                    result: "success",
-                    details: &format!("Deactivated '{}': {} removed", name, result.files_removed),
-                },
-            )
-            .await?;
+            if dry_run {
+                let result = placements::dry_run_deactivate(db, &name, &project_path).await?;
+                println!(
+                    "Dry run: deactivate '{}' for {}",
+                    result.profile_name, project_path
+                );
+                if !result.would_remove.is_empty() {
+                    println!("  Would remove:");
+                    for op in &result.would_remove {
+                        println!(
+                            "    {} ({}) -> {}",
+                            op.skill_name, op.agent_name, op.target_path
+                        );
+                    }
+                }
+                if !result.would_keep.is_empty() {
+                    println!("  Would keep (shared with other profiles):");
+                    for op in &result.would_keep {
+                        println!(
+                            "    {} ({}) -> {}",
+                            op.skill_name, op.agent_name, op.target_path
+                        );
+                    }
+                }
+            } else {
+                let result = placements::deactivate(db, &name, &project_path).await?;
+                println!(
+                    "Deactivated profile '{}': {} removed, {} kept",
+                    result.profile_name, result.files_removed, result.files_kept
+                );
+                logging::log(
+                    db,
+                    LogEntry {
+                        source: Source::Cli,
+                        agent_name: None,
+                        operation: "profile_deactivate",
+                        params: None,
+                        project_path: Some(&project_path),
+                        result: "success",
+                        details: &format!(
+                            "Deactivated '{}': {} removed",
+                            name, result.files_removed
+                        ),
+                    },
+                )
+                .await?;
+            }
         }
         ProfileAction::Switch { name, project } => {
             let project_path = resolve_project_path(project)?;
@@ -236,5 +290,19 @@ fn resolve_project_path(project: Option<String>) -> Result<String> {
     match project {
         Some(p) => Ok(std::fs::canonicalize(&p)?.to_string_lossy().to_string()),
         None => Ok(std::env::current_dir()?.to_string_lossy().to_string()),
+    }
+}
+
+fn print_planned_operations(operations: &[placements::PlannedOperation]) {
+    for op in operations {
+        let label = match &op.action {
+            PlannedAction::Copy => "COPY",
+            PlannedAction::Link => "LINK",
+            PlannedAction::Overwrite => "OVERWRITE",
+        };
+        println!(
+            "    [{}] {} ({}) -> {}",
+            label, op.skill_name, op.agent_name, op.target_path
+        );
     }
 }

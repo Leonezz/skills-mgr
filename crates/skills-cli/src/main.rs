@@ -150,6 +150,9 @@ pub enum ProfileAction {
         global: bool,
         #[arg(long)]
         force: bool,
+        /// Preview what would happen without making changes
+        #[arg(long)]
+        dry_run: bool,
     },
     Deactivate {
         name: String,
@@ -157,6 +160,9 @@ pub enum ProfileAction {
         project: Option<String>,
         #[arg(long)]
         global: bool,
+        /// Preview what would happen without making changes
+        #[arg(long)]
+        dry_run: bool,
     },
     Switch {
         name: String,
@@ -189,11 +195,15 @@ pub enum GlobalAction {
 pub enum AgentAction {
     List,
     Add {
-        name: String,
+        /// Agent name (e.g. claude-code, cursor). Omit with --all to add all known agents.
+        name: Option<String>,
         #[arg(long)]
-        project_path: String,
+        project_path: Option<String>,
         #[arg(long)]
-        global_path: String,
+        global_path: Option<String>,
+        /// Add all known agent presets at once
+        #[arg(long)]
+        all: bool,
     },
     Remove {
         name: String,

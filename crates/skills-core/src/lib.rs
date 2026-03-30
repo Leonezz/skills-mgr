@@ -5,10 +5,12 @@ pub mod entity;
 pub mod frontmatter;
 pub mod logging;
 pub mod placements;
+pub mod presets;
 pub mod profiles;
 pub mod registry;
 pub mod remote;
 
 pub use config::{AgentsConfig, AppDirs, ProfilesConfig, SourcesConfig};
 pub use db::Database;
+pub use presets::{AgentPreset, KNOWN_AGENTS, lookup_preset};
 pub use registry::Registry;
