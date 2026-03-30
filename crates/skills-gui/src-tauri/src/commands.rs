@@ -1075,6 +1075,51 @@ pub async fn deactivate_profile(
     ))
 }
 
+#[tauri::command]
+pub async fn switch_profile(
+    state: State<'_, AppState>,
+    new_profile: String,
+    project_path: String,
+    from_profile: Option<String>,
+    force: bool,
+) -> Result<String, String> {
+    let profiles_config =
+        ProfilesConfig::load(&state.dirs.profiles_toml()).map_err(|e| e.to_string())?;
+    let agents_config = AgentsConfig::load(&state.dirs.agents_toml()).map_err(|e| e.to_string())?;
+    let result = placements::switch_profile(
+        &state.dirs,
+        &state.db,
+        &profiles_config,
+        &agents_config,
+        &new_profile,
+        &project_path,
+        from_profile.as_deref(),
+        force,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    let _ = logging::log(
+        &state.db,
+        LogEntry {
+            source: Source::Gui,
+            agent_name: None,
+            operation: "profile_switch",
+            params: None,
+            project_path: Some(&project_path),
+            result: "success",
+            details: &format!(
+                "Switched to '{}': +{} -{} ~{}",
+                new_profile, result.skills_added, result.skills_removed, result.skills_kept
+            ),
+        },
+    )
+    .await;
+    Ok(format!(
+        "Switched to '{}': +{} added, ~{} kept, -{} removed",
+        result.new_profile, result.skills_added, result.skills_kept, result.skills_removed
+    ))
+}
+
 // --- Global Skills ---
 
 #[tauri::command]

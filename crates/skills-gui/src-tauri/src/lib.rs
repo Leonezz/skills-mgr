@@ -84,6 +84,7 @@ pub fn run() {
             commands::deactivate_project,
             commands::activate_profile,
             commands::deactivate_profile,
+            commands::switch_profile,
             commands::scan_skills,
             commands::delegate_skills,
             commands::link_remote,

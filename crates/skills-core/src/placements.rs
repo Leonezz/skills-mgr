@@ -362,6 +362,294 @@ pub async fn deactivate(
     })
 }
 
+/// Result of an atomic profile switch.
+#[derive(Debug)]
+pub struct SwitchResult {
+    pub old_profiles: Vec<String>,
+    pub new_profile: String,
+    pub skills_added: usize,
+    pub skills_removed: usize,
+    pub skills_kept: usize,
+    pub total_placements: usize,
+}
+
+/// Result of a dry-run switch.
+#[derive(Debug)]
+pub struct DryRunSwitchResult {
+    pub old_profiles: Vec<String>,
+    pub new_profile: String,
+    pub to_add: Vec<String>,
+    pub to_remove: Vec<String>,
+    pub to_keep: Vec<String>,
+    pub operations: Vec<PlannedOperation>,
+}
+
+/// Atomically switch profiles for a project using diff-based semantics.
+///
+/// 1. Resolve new profile fully (fail early)
+/// 2. Compute diff: skills to add, remove, keep
+/// 3. Copy new skills first
+/// 4. Update DB links for kept skills
+/// 5. Remove old-only skills
+/// 6. Update profile activation state
+#[allow(clippy::too_many_arguments)]
+pub async fn switch_profile(
+    dirs: &AppDirs,
+    db: &Database,
+    profiles_config: &ProfilesConfig,
+    agents_config: &AgentsConfig,
+    new_profile: &str,
+    project_path: &str,
+    from_profile: Option<&str>,
+    force: bool,
+) -> Result<SwitchResult> {
+    // 1. Resolve new profile fully (fail early)
+    let new_skills = profiles::resolve_profile(profiles_config, new_profile, true)?;
+    for skill_name in &new_skills {
+        if !dirs.registry().join(skill_name).join("SKILL.md").exists() {
+            bail!("Skill '{}' not found in registry", skill_name);
+        }
+    }
+
+    let project_name = Path::new(project_path)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string());
+    let project_id = db
+        .get_or_create_project(project_path, project_name.as_deref())
+        .await?;
+
+    // 2. Get old profiles and their skills
+    let active = db.get_active_profiles(project_id).await?;
+    let old_profiles: Vec<String> = if let Some(from) = from_profile {
+        if !active.contains(&from.to_string()) {
+            bail!("Profile '{}' is not active for this project", from);
+        }
+        vec![from.to_string()]
+    } else {
+        active.clone()
+    };
+
+    if old_profiles.is_empty() && active.contains(&new_profile.to_string()) {
+        bail!("Profile '{}' is already active", new_profile);
+    }
+
+    let mut old_skills: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for p in &old_profiles {
+        if let Ok(skills) = profiles::resolve_profile(profiles_config, p, true) {
+            old_skills.extend(skills);
+        }
+    }
+
+    let new_skills_set: std::collections::BTreeSet<String> = new_skills.iter().cloned().collect();
+    let to_keep: Vec<String> = old_skills.intersection(&new_skills_set).cloned().collect();
+    let to_remove: Vec<String> = old_skills.difference(&new_skills_set).cloned().collect();
+    let to_add: Vec<String> = new_skills_set.difference(&old_skills).cloned().collect();
+
+    let agents: Vec<(String, String)> = agents_config
+        .agents
+        .iter()
+        .filter(|(_, def)| def.enabled)
+        .map(|(name, def)| (name.clone(), def.project_path.clone()))
+        .collect();
+
+    if agents.is_empty() {
+        bail!("No agents configured. Run `skills-mgr agent add <name>` first.");
+    }
+
+    // 3. Copy new skills first (project never has fewer skills than needed)
+    let mut placed_paths: Vec<PathBuf> = Vec::new();
+    for skill_name in &to_add {
+        for (agent_name, agent_project_path) in &agents {
+            let target = PathBuf::from(project_path)
+                .join(agent_project_path)
+                .join(skill_name);
+            let target_str = target.to_string_lossy().to_string();
+            let src = dirs.registry().join(skill_name);
+
+            // Handle conflicts
+            if let Some(existing) = db.find_conflict(project_id, &target_str).await? {
+                if existing.skill_name == *skill_name {
+                    // Same skill already there, just link
+                    db.link_placement_profile(existing.id, new_profile).await?;
+                    continue;
+                } else if force {
+                    db.delete_placement(existing.id).await?;
+                    if target.exists() {
+                        std::fs::remove_dir_all(&target)?;
+                    }
+                } else {
+                    bail!(
+                        "Conflict: {} already occupied by '{}'. Use --force to overwrite.",
+                        target_str,
+                        existing.skill_name
+                    );
+                }
+            }
+
+            if let Err(e) = registry::copy_dir_recursive(&src, &target) {
+                for rollback_path in &placed_paths {
+                    let _ = std::fs::remove_dir_all(rollback_path);
+                }
+                bail!(
+                    "Failed to copy skill '{}' to '{}': {}. Switch rolled back.",
+                    skill_name,
+                    target_str,
+                    e
+                );
+            }
+            placed_paths.push(target.clone());
+
+            let placement_id = db
+                .insert_placement(project_id, skill_name, agent_name, &target_str)
+                .await?;
+            db.link_placement_profile(placement_id, new_profile).await?;
+        }
+    }
+
+    // 4. Update kept skills — relink from old profiles to new
+    for skill_name in &to_keep {
+        for (_agent_name, agent_project_path) in &agents {
+            let target = PathBuf::from(project_path)
+                .join(agent_project_path)
+                .join(skill_name);
+            let target_str = target.to_string_lossy().to_string();
+
+            if let Some(existing) = db.find_conflict(project_id, &target_str).await? {
+                // Link new profile
+                db.link_placement_profile(existing.id, new_profile).await?;
+                // Unlink old profiles
+                for old_p in &old_profiles {
+                    db.unlink_placement_profile(existing.id, old_p).await?;
+                }
+            }
+        }
+    }
+
+    // 5. Remove old-only skills
+    let mut skills_removed_count = 0;
+    for skill_name in &to_remove {
+        for (_agent_name, agent_project_path) in &agents {
+            let target = PathBuf::from(project_path)
+                .join(agent_project_path)
+                .join(skill_name);
+            let target_str = target.to_string_lossy().to_string();
+
+            if let Some(existing) = db.find_conflict(project_id, &target_str).await? {
+                // Unlink old profiles
+                for old_p in &old_profiles {
+                    db.unlink_placement_profile(existing.id, old_p).await?;
+                }
+                let remaining = db.get_placement_profile_count(existing.id).await?;
+                if remaining == 0 {
+                    if target.exists() {
+                        std::fs::remove_dir_all(&target)?;
+                    }
+                    db.delete_placement(existing.id).await?;
+                    skills_removed_count += 1;
+                }
+            }
+        }
+    }
+
+    // 6. Update profile activation state
+    for old_p in &old_profiles {
+        db.deactivate_project_profile(project_id, old_p).await?;
+    }
+    db.activate_project_profile(project_id, new_profile).await?;
+
+    let total_placements = (to_add.len() + to_keep.len()) * agents.len();
+    Ok(SwitchResult {
+        old_profiles,
+        new_profile: new_profile.to_string(),
+        skills_added: to_add.len(),
+        skills_removed: skills_removed_count,
+        skills_kept: to_keep.len(),
+        total_placements,
+    })
+}
+
+/// Preview what a profile switch would do without making any changes.
+pub async fn dry_run_switch(
+    dirs: &AppDirs,
+    db: &Database,
+    profiles_config: &ProfilesConfig,
+    agents_config: &AgentsConfig,
+    new_profile: &str,
+    project_path: &str,
+    from_profile: Option<&str>,
+) -> Result<DryRunSwitchResult> {
+    let new_skills = profiles::resolve_profile(profiles_config, new_profile, true)?;
+    for skill_name in &new_skills {
+        if !dirs.registry().join(skill_name).join("SKILL.md").exists() {
+            bail!("Skill '{}' not found in registry", skill_name);
+        }
+    }
+
+    let project_id = db.get_or_create_project(project_path, None).await?;
+    let active = db.get_active_profiles(project_id).await?;
+    let old_profiles: Vec<String> = if let Some(from) = from_profile {
+        vec![from.to_string()]
+    } else {
+        active.clone()
+    };
+
+    let mut old_skills: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for p in &old_profiles {
+        if let Ok(skills) = profiles::resolve_profile(profiles_config, p, true) {
+            old_skills.extend(skills);
+        }
+    }
+
+    let new_skills_set: std::collections::BTreeSet<String> = new_skills.iter().cloned().collect();
+    let to_keep: Vec<String> = old_skills.intersection(&new_skills_set).cloned().collect();
+    let to_remove: Vec<String> = old_skills.difference(&new_skills_set).cloned().collect();
+    let to_add: Vec<String> = new_skills_set.difference(&old_skills).cloned().collect();
+
+    let agents: Vec<(String, String)> = agents_config
+        .agents
+        .iter()
+        .filter(|(_, def)| def.enabled)
+        .map(|(name, def)| (name.clone(), def.project_path.clone()))
+        .collect();
+
+    let mut operations = Vec::new();
+    for skill_name in &to_add {
+        for (agent_name, agent_project_path) in &agents {
+            let target = PathBuf::from(project_path)
+                .join(agent_project_path)
+                .join(skill_name);
+            operations.push(PlannedOperation {
+                skill_name: skill_name.clone(),
+                agent_name: agent_name.clone(),
+                target_path: target.to_string_lossy().to_string(),
+                action: PlannedAction::Copy,
+            });
+        }
+    }
+    for skill_name in &to_keep {
+        for (agent_name, agent_project_path) in &agents {
+            let target = PathBuf::from(project_path)
+                .join(agent_project_path)
+                .join(skill_name);
+            operations.push(PlannedOperation {
+                skill_name: skill_name.clone(),
+                agent_name: agent_name.clone(),
+                target_path: target.to_string_lossy().to_string(),
+                action: PlannedAction::Link,
+            });
+        }
+    }
+
+    Ok(DryRunSwitchResult {
+        old_profiles,
+        new_profile: new_profile.to_string(),
+        to_add,
+        to_remove,
+        to_keep,
+        operations,
+    })
+}
+
 /// Get status for a project — active profiles and placement count.
 pub async fn status(
     db: &Database,
