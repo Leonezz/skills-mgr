@@ -330,6 +330,22 @@ impl SkillsMcpServer {
                 }
             },
             {
+                "name": "update_skill",
+                "description": "Update a git-sourced skill from its tracked remote and refresh all placements",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string", "description": "Skill name to update" }
+                    },
+                    "required": ["name"]
+                }
+            },
+            {
+                "name": "sync_skills",
+                "description": "Sync all git-sourced skills from their tracked remotes",
+                "inputSchema": { "type": "object", "properties": {} }
+            },
+            {
                 "name": "unlink_remote",
                 "description": "Unlink a skill from its remote repository",
                 "inputSchema": {
@@ -357,6 +373,7 @@ impl SkillsMcpServer {
                             "files": s.files,
                             "total_bytes": s.total_bytes,
                             "token_estimate": s.token_estimate,
+                            "metadata_token_estimate": s.metadata_token_estimate,
                         })
                     })
                     .collect();
@@ -892,6 +909,98 @@ impl SkillsMcpServer {
                     })
                     .collect();
                 Ok(serde_json::to_string_pretty(&result)?)
+            }
+            "update_skill" => {
+                let name = args["name"].as_str().context("name required")?;
+                let registry = Registry::new(self.dirs.clone());
+                let result = registry.update_from_remote(name).await?;
+                match &result {
+                    skills_core::registry::SkillUpdateResult::Updated {
+                        name, new_hash, ..
+                    } => {
+                        let replaced =
+                            skills_core::placements::replace_skill(&self.dirs, &self.db, name)
+                                .await?;
+                        let _ = logging::log(
+                            &self.db,
+                            LogEntry {
+                                source: Source::Mcp,
+                                agent_name: None,
+                                operation: "skill_update",
+                                params: None,
+                                project_path: None,
+                                result: "success",
+                                details: &format!(
+                                    "Updated '{}', {} placements refreshed",
+                                    name, replaced
+                                ),
+                            },
+                        )
+                        .await;
+                        Ok(format!(
+                            "Updated '{}' (new hash: {}…, {} placements refreshed)",
+                            name,
+                            &new_hash[..20.min(new_hash.len())],
+                            replaced
+                        ))
+                    }
+                    skills_core::registry::SkillUpdateResult::AlreadyUpToDate { name } => {
+                        Ok(format!("'{}' is already up to date", name))
+                    }
+                    skills_core::registry::SkillUpdateResult::Skipped { name, reason } => {
+                        Ok(format!("'{}' skipped: {}", name, reason))
+                    }
+                    skills_core::registry::SkillUpdateResult::Failed { name, error } => {
+                        Ok(format!("'{}' failed: {}", name, error))
+                    }
+                }
+            }
+            "sync_skills" => {
+                let registry = Registry::new(self.dirs.clone());
+                let results = registry.sync_all().await?;
+                let mut summary = Vec::new();
+                let mut updated_count = 0;
+                for result in &results {
+                    match result {
+                        skills_core::registry::SkillUpdateResult::Updated { name, .. } => {
+                            let replaced =
+                                skills_core::placements::replace_skill(&self.dirs, &self.db, name)
+                                    .await
+                                    .unwrap_or(0);
+                            summary.push(format!("{}: updated ({} refreshed)", name, replaced));
+                            updated_count += 1;
+                        }
+                        skills_core::registry::SkillUpdateResult::AlreadyUpToDate { name } => {
+                            summary.push(format!("{}: up to date", name));
+                        }
+                        skills_core::registry::SkillUpdateResult::Skipped { name, reason } => {
+                            summary.push(format!("{}: skipped ({})", name, reason));
+                        }
+                        skills_core::registry::SkillUpdateResult::Failed { name, error } => {
+                            summary.push(format!("{}: FAILED ({})", name, error));
+                        }
+                    }
+                }
+                if updated_count > 0 {
+                    let _ = logging::log(
+                        &self.db,
+                        LogEntry {
+                            source: Source::Mcp,
+                            agent_name: None,
+                            operation: "skill_sync",
+                            params: None,
+                            project_path: None,
+                            result: "success",
+                            details: &format!("Synced {} skills", updated_count),
+                        },
+                    )
+                    .await;
+                }
+                Ok(format!(
+                    "Sync complete: {} updated\n{}",
+                    updated_count,
+                    summary.join("\n")
+                ))
             }
             "link_remote" => {
                 let params = args;
