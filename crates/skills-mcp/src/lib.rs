@@ -254,6 +254,21 @@ impl SkillsMcpServer {
                 }
             },
             {
+                "name": "switch_profile",
+                "description": "Atomically switch from current active profile(s) to a new one using diff-based semantics",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string", "description": "New profile to activate" },
+                        "project_path": { "type": "string" },
+                        "from": { "type": "string", "description": "Explicit old profile to switch from (optional, default: all active)" },
+                        "force": { "type": "boolean" },
+                        "dry_run": { "type": "boolean", "description": "Preview without making changes" }
+                    },
+                    "required": ["name", "project_path"]
+                }
+            },
+            {
                 "name": "global_status",
                 "description": "Get global skills status",
                 "inputSchema": { "type": "object", "properties": {} }
@@ -315,6 +330,22 @@ impl SkillsMcpServer {
                 }
             },
             {
+                "name": "update_skill",
+                "description": "Update a git-sourced skill from its tracked remote and refresh all placements",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string", "description": "Skill name to update" }
+                    },
+                    "required": ["name"]
+                }
+            },
+            {
+                "name": "sync_skills",
+                "description": "Sync all git-sourced skills from their tracked remotes",
+                "inputSchema": { "type": "object", "properties": {} }
+            },
+            {
                 "name": "unlink_remote",
                 "description": "Unlink a skill from its remote repository",
                 "inputSchema": {
@@ -342,6 +373,7 @@ impl SkillsMcpServer {
                             "files": s.files,
                             "total_bytes": s.total_bytes,
                             "token_estimate": s.token_estimate,
+                            "metadata_token_estimate": s.metadata_token_estimate,
                         })
                     })
                     .collect();
@@ -656,6 +688,80 @@ impl SkillsMcpServer {
                     ))
                 }
             }
+            "switch_profile" => {
+                let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let project_path = args
+                    .get("project_path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let from = args.get("from").and_then(|v| v.as_str());
+                let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
+                let dry_run = args
+                    .get("dry_run")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let profiles_config = ProfilesConfig::load(&self.dirs.profiles_toml())?;
+                let agents_config = AgentsConfig::load(&self.dirs.agents_toml())?;
+
+                if dry_run {
+                    let result = skills_core::placements::dry_run_switch(
+                        &self.dirs,
+                        &self.db,
+                        &profiles_config,
+                        &agents_config,
+                        name,
+                        project_path,
+                        from,
+                    )
+                    .await?;
+                    Ok(serde_json::to_string_pretty(&json!({
+                        "dry_run": true,
+                        "old_profiles": result.old_profiles,
+                        "new_profile": result.new_profile,
+                        "to_add": result.to_add,
+                        "to_remove": result.to_remove,
+                        "to_keep": result.to_keep,
+                    }))?)
+                } else {
+                    let result = skills_core::placements::switch_profile(
+                        &self.dirs,
+                        &self.db,
+                        &profiles_config,
+                        &agents_config,
+                        name,
+                        project_path,
+                        from,
+                        force,
+                    )
+                    .await?;
+                    let _ = logging::log(
+                        &self.db,
+                        LogEntry {
+                            source: Source::Mcp,
+                            agent_name: None,
+                            operation: "profile_switch",
+                            params: None,
+                            project_path: Some(project_path),
+                            result: "success",
+                            details: &format!(
+                                "Switched to '{}': +{} -{} ~{}",
+                                name,
+                                result.skills_added,
+                                result.skills_removed,
+                                result.skills_kept
+                            ),
+                        },
+                    )
+                    .await;
+                    Ok(format!(
+                        "Switched to '{}': +{} added, ~{} kept, -{} removed",
+                        result.new_profile,
+                        result.skills_added,
+                        result.skills_kept,
+                        result.skills_removed
+                    ))
+                }
+            }
             "global_status" => {
                 let config = ProfilesConfig::load(&self.dirs.profiles_toml())?;
                 let status = skills_core::placements::global_status(&self.db, &config).await?;
@@ -803,6 +909,98 @@ impl SkillsMcpServer {
                     })
                     .collect();
                 Ok(serde_json::to_string_pretty(&result)?)
+            }
+            "update_skill" => {
+                let name = args["name"].as_str().context("name required")?;
+                let registry = Registry::new(self.dirs.clone());
+                let result = registry.update_from_remote(name).await?;
+                match &result {
+                    skills_core::registry::SkillUpdateResult::Updated {
+                        name, new_hash, ..
+                    } => {
+                        let replaced =
+                            skills_core::placements::replace_skill(&self.dirs, &self.db, name)
+                                .await?;
+                        let _ = logging::log(
+                            &self.db,
+                            LogEntry {
+                                source: Source::Mcp,
+                                agent_name: None,
+                                operation: "skill_update",
+                                params: None,
+                                project_path: None,
+                                result: "success",
+                                details: &format!(
+                                    "Updated '{}', {} placements refreshed",
+                                    name, replaced
+                                ),
+                            },
+                        )
+                        .await;
+                        Ok(format!(
+                            "Updated '{}' (new hash: {}…, {} placements refreshed)",
+                            name,
+                            &new_hash[..20.min(new_hash.len())],
+                            replaced
+                        ))
+                    }
+                    skills_core::registry::SkillUpdateResult::AlreadyUpToDate { name } => {
+                        Ok(format!("'{}' is already up to date", name))
+                    }
+                    skills_core::registry::SkillUpdateResult::Skipped { name, reason } => {
+                        Ok(format!("'{}' skipped: {}", name, reason))
+                    }
+                    skills_core::registry::SkillUpdateResult::Failed { name, error } => {
+                        Ok(format!("'{}' failed: {}", name, error))
+                    }
+                }
+            }
+            "sync_skills" => {
+                let registry = Registry::new(self.dirs.clone());
+                let results = registry.sync_all().await?;
+                let mut summary = Vec::new();
+                let mut updated_count = 0;
+                for result in &results {
+                    match result {
+                        skills_core::registry::SkillUpdateResult::Updated { name, .. } => {
+                            let replaced =
+                                skills_core::placements::replace_skill(&self.dirs, &self.db, name)
+                                    .await
+                                    .unwrap_or(0);
+                            summary.push(format!("{}: updated ({} refreshed)", name, replaced));
+                            updated_count += 1;
+                        }
+                        skills_core::registry::SkillUpdateResult::AlreadyUpToDate { name } => {
+                            summary.push(format!("{}: up to date", name));
+                        }
+                        skills_core::registry::SkillUpdateResult::Skipped { name, reason } => {
+                            summary.push(format!("{}: skipped ({})", name, reason));
+                        }
+                        skills_core::registry::SkillUpdateResult::Failed { name, error } => {
+                            summary.push(format!("{}: FAILED ({})", name, error));
+                        }
+                    }
+                }
+                if updated_count > 0 {
+                    let _ = logging::log(
+                        &self.db,
+                        LogEntry {
+                            source: Source::Mcp,
+                            agent_name: None,
+                            operation: "skill_sync",
+                            params: None,
+                            project_path: None,
+                            result: "success",
+                            details: &format!("Synced {} skills", updated_count),
+                        },
+                    )
+                    .await;
+                }
+                Ok(format!(
+                    "Sync complete: {} updated\n{}",
+                    updated_count,
+                    summary.join("\n")
+                ))
             }
             "link_remote" => {
                 let params = args;

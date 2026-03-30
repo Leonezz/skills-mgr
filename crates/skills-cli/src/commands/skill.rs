@@ -1,8 +1,7 @@
 use crate::SkillAction;
 use anyhow::Result;
-use skills_core::config::SourcesConfig;
 use skills_core::logging::{self, LogEntry, Source};
-use skills_core::registry::compute_tree_hash;
+use skills_core::registry::SkillUpdateResult;
 use skills_core::{AppDirs, Database, Registry};
 
 pub async fn run(dirs: &AppDirs, db: &Database, action: SkillAction) -> Result<()> {
@@ -140,7 +139,6 @@ pub async fn run(dirs: &AppDirs, db: &Database, action: SkillAction) -> Result<(
             }
         }
         SkillAction::Update { name, all } => {
-            let mut sources = SourcesConfig::load(&dirs.sources_toml())?;
             let skills_to_update: Vec<String> = if all {
                 registry.list()?.into_iter().map(|s| s.name).collect()
             } else if let Some(n) = name {
@@ -152,29 +150,32 @@ pub async fn run(dirs: &AppDirs, db: &Database, action: SkillAction) -> Result<(
 
             let mut updated = 0;
             for skill_name in &skills_to_update {
-                let skill_dir = dirs.registry().join(skill_name);
-                if !skill_dir.exists() {
-                    println!("  {} — not found, skipping", skill_name);
-                    continue;
-                }
-                let new_hash = compute_tree_hash(&skill_dir)?;
-                let old_hash = sources.skills.get(skill_name).and_then(|s| s.hash.as_ref());
-                if old_hash == Some(&new_hash) {
-                    println!("  {} — up to date", skill_name);
-                } else {
-                    if let Some(entry) = sources.skills.get_mut(skill_name) {
-                        entry.hash = Some(new_hash);
-                        entry.updated_at = Some(
-                            chrono::Utc::now()
-                                .format("%Y-%m-%dT%H:%M:%S%.3fZ")
-                                .to_string(),
+                match registry.update_from_remote(skill_name).await {
+                    Ok(SkillUpdateResult::Updated { name, new_hash, .. }) => {
+                        let replaced =
+                            skills_core::placements::replace_skill(dirs, db, &name).await?;
+                        println!(
+                            "  {} — updated (hash: {}…, {} placements refreshed)",
+                            name,
+                            &new_hash[..20.min(new_hash.len())],
+                            replaced
                         );
+                        updated += 1;
                     }
-                    println!("  {} — hash updated", skill_name);
-                    updated += 1;
+                    Ok(SkillUpdateResult::AlreadyUpToDate { name }) => {
+                        println!("  {} — already up to date", name);
+                    }
+                    Ok(SkillUpdateResult::Skipped { name, reason }) => {
+                        println!("  {} — skipped ({})", name, reason);
+                    }
+                    Ok(SkillUpdateResult::Failed { name, error }) => {
+                        println!("  {} — FAILED: {}", name, error);
+                    }
+                    Err(e) => {
+                        println!("  {} — FAILED: {}", skill_name, e);
+                    }
                 }
             }
-            sources.save(&dirs.sources_toml())?;
             println!("\n{} skills updated", updated);
             if updated > 0 {
                 logging::log(
@@ -186,7 +187,52 @@ pub async fn run(dirs: &AppDirs, db: &Database, action: SkillAction) -> Result<(
                         params: None,
                         project_path: None,
                         result: "success",
-                        details: &format!("Updated {} skills", updated),
+                        details: &format!("Updated {} skills from remote", updated),
+                    },
+                )
+                .await?;
+            }
+        }
+        SkillAction::Sync => {
+            println!("Syncing all git-sourced skills...");
+            let results = registry.sync_all().await?;
+            let mut updated = 0;
+            for result in &results {
+                match result {
+                    SkillUpdateResult::Updated { name, new_hash, .. } => {
+                        let replaced =
+                            skills_core::placements::replace_skill(dirs, db, name).await?;
+                        println!(
+                            "  {} — updated (hash: {}…, {} placements refreshed)",
+                            name,
+                            &new_hash[..20.min(new_hash.len())],
+                            replaced
+                        );
+                        updated += 1;
+                    }
+                    SkillUpdateResult::AlreadyUpToDate { name } => {
+                        println!("  {} — already up to date", name);
+                    }
+                    SkillUpdateResult::Skipped { name, reason } => {
+                        println!("  {} — skipped ({})", name, reason);
+                    }
+                    SkillUpdateResult::Failed { name, error } => {
+                        println!("  {} — FAILED: {}", name, error);
+                    }
+                }
+            }
+            println!("\n{} skills updated", updated);
+            if updated > 0 {
+                logging::log(
+                    db,
+                    LogEntry {
+                        source: Source::Cli,
+                        agent_name: None,
+                        operation: "skill_sync",
+                        params: None,
+                        project_path: None,
+                        result: "success",
+                        details: &format!("Synced {} skills from remote", updated),
                     },
                 )
                 .await?;

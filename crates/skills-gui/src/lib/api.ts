@@ -97,6 +97,14 @@ export async function unlinkRemote(name: string) {
   return await invoke("unlink_remote", { name }) as string
 }
 
+export async function syncSkill(name: string) {
+  return await invoke("sync_skill", { name }) as string
+}
+
+export async function syncAllSkills() {
+  return await invoke("sync_all_skills") as string
+}
+
 // --- Profiles ---
 
 export async function listProfiles() {

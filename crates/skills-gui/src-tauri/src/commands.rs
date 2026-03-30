@@ -24,6 +24,7 @@ pub struct SkillInfo {
     pub dir_path: String,
     pub total_bytes: u64,
     pub token_estimate: u64,
+    pub metadata_token_estimate: u64,
 }
 
 #[derive(Serialize)]
@@ -86,6 +87,7 @@ pub async fn list_skills(state: State<'_, AppState>) -> Result<Vec<SkillInfo>, S
                 dir_path,
                 total_bytes: s.total_bytes,
                 token_estimate: s.token_estimate,
+                metadata_token_estimate: s.metadata_token_estimate,
             }
         })
         .collect())
@@ -1072,6 +1074,124 @@ pub async fn deactivate_profile(
     Ok(format!(
         "Deactivated '{}': {} removed, {} kept",
         result.profile_name, result.files_removed, result.files_kept
+    ))
+}
+
+#[tauri::command]
+pub async fn sync_skill(state: State<'_, AppState>, name: String) -> Result<String, String> {
+    let registry = Registry::new(state.dirs.clone());
+    let result = registry
+        .update_from_remote(&name)
+        .await
+        .map_err(|e| e.to_string())?;
+    match result {
+        skills_core::registry::SkillUpdateResult::Updated { name, new_hash, .. } => {
+            let replaced = placements::replace_skill(&state.dirs, &state.db, &name)
+                .await
+                .map_err(|e| e.to_string())?;
+            let _ = logging::log(
+                &state.db,
+                LogEntry {
+                    source: Source::Gui,
+                    agent_name: None,
+                    operation: "skill_sync",
+                    params: None,
+                    project_path: None,
+                    result: "success",
+                    details: &format!("Synced '{}', {} placements refreshed", name, replaced),
+                },
+            )
+            .await;
+            Ok(format!(
+                "Updated '{}' (hash: {}…, {} placements refreshed)",
+                name,
+                &new_hash[..20.min(new_hash.len())],
+                replaced
+            ))
+        }
+        skills_core::registry::SkillUpdateResult::AlreadyUpToDate { name } => {
+            Ok(format!("'{}' is already up to date", name))
+        }
+        skills_core::registry::SkillUpdateResult::Skipped { name, reason } => {
+            Ok(format!("'{}' skipped: {}", name, reason))
+        }
+        skills_core::registry::SkillUpdateResult::Failed { name, error } => {
+            Err(format!("'{}' failed: {}", name, error))
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn sync_all_skills(state: State<'_, AppState>) -> Result<String, String> {
+    let registry = Registry::new(state.dirs.clone());
+    let results = registry.sync_all().await.map_err(|e| e.to_string())?;
+    let mut updated = 0;
+    for result in &results {
+        if let skills_core::registry::SkillUpdateResult::Updated { name, .. } = result {
+            let _ = placements::replace_skill(&state.dirs, &state.db, name).await;
+            updated += 1;
+        }
+    }
+    if updated > 0 {
+        let _ = logging::log(
+            &state.db,
+            LogEntry {
+                source: Source::Gui,
+                agent_name: None,
+                operation: "skill_sync_all",
+                params: None,
+                project_path: None,
+                result: "success",
+                details: &format!("Synced {} skills from remote", updated),
+            },
+        )
+        .await;
+    }
+    Ok(format!("Sync complete: {} skills updated", updated))
+}
+
+#[tauri::command]
+pub async fn switch_profile(
+    state: State<'_, AppState>,
+    new_profile: String,
+    project_path: String,
+    from_profile: Option<String>,
+    force: bool,
+) -> Result<String, String> {
+    let profiles_config =
+        ProfilesConfig::load(&state.dirs.profiles_toml()).map_err(|e| e.to_string())?;
+    let agents_config = AgentsConfig::load(&state.dirs.agents_toml()).map_err(|e| e.to_string())?;
+    let result = placements::switch_profile(
+        &state.dirs,
+        &state.db,
+        &profiles_config,
+        &agents_config,
+        &new_profile,
+        &project_path,
+        from_profile.as_deref(),
+        force,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    let _ = logging::log(
+        &state.db,
+        LogEntry {
+            source: Source::Gui,
+            agent_name: None,
+            operation: "profile_switch",
+            params: None,
+            project_path: Some(&project_path),
+            result: "success",
+            details: &format!(
+                "Switched to '{}': +{} -{} ~{}",
+                new_profile, result.skills_added, result.skills_removed, result.skills_kept
+            ),
+        },
+    )
+    .await;
+    Ok(format!(
+        "Switched to '{}': +{} added, ~{} kept, -{} removed",
+        result.new_profile, result.skills_added, result.skills_kept, result.skills_removed
     ))
 }
 

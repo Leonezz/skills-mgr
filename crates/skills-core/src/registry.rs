@@ -15,6 +15,29 @@ pub struct SkillMeta {
     pub source: Option<SkillSource>,
     pub total_bytes: u64,
     pub token_estimate: u64,
+    /// Token cost of just name + description (startup cost per conversation).
+    pub metadata_token_estimate: u64,
+}
+
+/// Result of updating a single skill from its remote source.
+#[derive(Debug)]
+pub enum SkillUpdateResult {
+    Updated {
+        name: String,
+        old_hash: String,
+        new_hash: String,
+    },
+    AlreadyUpToDate {
+        name: String,
+    },
+    Skipped {
+        name: String,
+        reason: String,
+    },
+    Failed {
+        name: String,
+        error: String,
+    },
 }
 
 /// Manages the skill registry directory.
@@ -52,6 +75,7 @@ impl Registry {
             let description = parse_description(&skill_md).ok();
             let (files, total_bytes, token_estimate) = list_files_with_stats(&skill_dir)?;
             let source = sources.skills.get(&name).cloned();
+            let metadata_token_estimate = compute_metadata_tokens(&name, description.as_deref());
 
             skills.push(SkillMeta {
                 name,
@@ -61,6 +85,7 @@ impl Registry {
                 source,
                 total_bytes,
                 token_estimate,
+                metadata_token_estimate,
             });
         }
 
@@ -80,6 +105,7 @@ impl Registry {
         let description = parse_description(&skill_md).ok();
         let (files, total_bytes, token_estimate) = list_files_with_stats(&skill_dir)?;
         let source = sources.skills.get(name).cloned();
+        let metadata_token_estimate = compute_metadata_tokens(name, description.as_deref());
 
         Ok(Some(SkillMeta {
             name: name.to_string(),
@@ -89,6 +115,7 @@ impl Registry {
             source,
             total_bytes,
             token_estimate,
+            metadata_token_estimate,
         }))
     }
 
@@ -457,6 +484,99 @@ impl Registry {
         sources.save(&self.dirs.sources_toml())?;
         Ok(())
     }
+
+    /// Update a Git-sourced skill from its tracked remote.
+    ///
+    /// Downloads a fresh tarball, compares the hash, and overwrites the
+    /// registry entry if content has changed.
+    pub async fn update_from_remote(&self, name: &str) -> Result<SkillUpdateResult> {
+        let sources = SourcesConfig::load(&self.dirs.sources_toml()).unwrap_or_default();
+        let source = match sources.skills.get(name) {
+            Some(s) => s,
+            None => {
+                return Ok(SkillUpdateResult::Skipped {
+                    name: name.to_string(),
+                    reason: "not tracked in sources.toml".to_string(),
+                });
+            }
+        };
+
+        if source.source_type != SourceType::Git {
+            return Ok(SkillUpdateResult::Skipped {
+                name: name.to_string(),
+                reason: format!("{:?} source (not Git)", source.source_type),
+            });
+        }
+
+        let url = match &source.url {
+            Some(u) => u.clone(),
+            None => {
+                return Ok(SkillUpdateResult::Skipped {
+                    name: name.to_string(),
+                    reason: "no URL in source entry".to_string(),
+                });
+            }
+        };
+
+        let github_source = remote::parse_github_url(&url)?;
+        let (_tmp_dir, skill_dir) = remote::download_github_skill(&github_source).await?;
+        let new_hash = compute_tree_hash(&skill_dir)?;
+
+        let old_hash = source.hash.clone().unwrap_or_default();
+        if new_hash == old_hash {
+            return Ok(SkillUpdateResult::AlreadyUpToDate {
+                name: name.to_string(),
+            });
+        }
+
+        // Replace registry entry
+        let dest = self.dirs.registry().join(name);
+        if dest.exists() {
+            std::fs::remove_dir_all(&dest)?;
+        }
+        copy_dir_recursive(&skill_dir, &dest)?;
+
+        // Update sources.toml
+        let mut sources = SourcesConfig::load(&self.dirs.sources_toml()).unwrap_or_default();
+        if let Some(entry) = sources.skills.get_mut(name) {
+            entry.hash = Some(new_hash.clone());
+            entry.updated_at = Some(
+                chrono::Utc::now()
+                    .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+                    .to_string(),
+            );
+        }
+        sources.save(&self.dirs.sources_toml())?;
+
+        Ok(SkillUpdateResult::Updated {
+            name: name.to_string(),
+            old_hash,
+            new_hash,
+        })
+    }
+
+    /// Update all Git-sourced skills from their tracked remotes.
+    pub async fn sync_all(&self) -> Result<Vec<SkillUpdateResult>> {
+        let sources = SourcesConfig::load(&self.dirs.sources_toml()).unwrap_or_default();
+        let git_skills: Vec<String> = sources
+            .skills
+            .iter()
+            .filter(|(_, s)| s.source_type == SourceType::Git)
+            .map(|(name, _)| name.clone())
+            .collect();
+
+        let mut results = Vec::new();
+        for name in &git_skills {
+            match self.update_from_remote(name).await {
+                Ok(r) => results.push(r),
+                Err(e) => results.push(SkillUpdateResult::Failed {
+                    name: name.clone(),
+                    error: e.to_string(),
+                }),
+            }
+        }
+        Ok(results)
+    }
 }
 
 /// Compute a tree hash for a skill directory.
@@ -493,11 +613,17 @@ const BINARY_EXTENSIONS: &[&str] = &[
     "lock",
 ];
 
-fn is_text_file(path: &Path) -> bool {
+pub fn is_text_file(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .map(|e| !BINARY_EXTENSIONS.iter().any(|&b| b.eq_ignore_ascii_case(e)))
         .unwrap_or(true)
+}
+
+/// Compute the token cost of just name + description (startup cost per conversation).
+fn compute_metadata_tokens(name: &str, description: Option<&str>) -> u64 {
+    let bytes = name.len() as u64 + description.unwrap_or("").len() as u64;
+    bytes / BYTES_PER_TOKEN
 }
 
 /// List all files in a directory recursively, returning relative paths (sorted),

@@ -227,7 +227,9 @@ fn collect_files(
         {
             collect_files(base, &path, files, total_bytes, depth + 1);
         } else {
-            if let Ok(meta) = entry.metadata() {
+            if crate::registry::is_text_file(&path)
+                && let Ok(meta) = entry.metadata()
+            {
                 *total_bytes += meta.len();
             }
             if let Ok(rel) = path.strip_prefix(base) {

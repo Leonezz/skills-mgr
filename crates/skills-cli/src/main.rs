@@ -95,6 +95,8 @@ pub enum SkillAction {
     Files {
         name: String,
     },
+    /// Re-fetch all git-sourced skills from their remotes
+    Sync,
     /// Discover unmanaged skills in agent paths
     Discover {
         /// Only scan global paths (skip project paths)
@@ -168,6 +170,15 @@ pub enum ProfileAction {
         name: String,
         #[arg(long)]
         project: Option<String>,
+        /// Explicit old profile to switch from (default: all active)
+        #[arg(long)]
+        from: Option<String>,
+        /// Force overwrite on conflicts
+        #[arg(long)]
+        force: bool,
+        /// Preview what would happen without making changes
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -397,22 +408,22 @@ fn run_budget(dirs: &AppDirs, profile: Option<String>, project: Option<String>) 
         registry.list()?.into_iter().map(|s| s.name).collect()
     };
 
-    let mut total_bytes: u64 = 0;
     let mut total_tokens: u64 = 0;
+    let mut total_metadata_tokens: u64 = 0;
     let mut total_files = 0;
 
     for skill_name in &skill_names {
         match registry.get(skill_name)? {
             Some(skill) => {
                 println!(
-                    "  {} — {} files, {} text bytes (~{} tokens)",
+                    "  {} — {} files, ~{} tokens startup / ~{} tokens full",
                     skill.name,
                     skill.files.len(),
-                    skill.total_bytes,
+                    skill.metadata_token_estimate,
                     skill.token_estimate
                 );
-                total_bytes += skill.total_bytes;
                 total_tokens += skill.token_estimate;
+                total_metadata_tokens += skill.metadata_token_estimate;
                 total_files += skill.files.len();
             }
             None => println!("  {} — not found", skill_name),
@@ -420,10 +431,10 @@ fn run_budget(dirs: &AppDirs, profile: Option<String>, project: Option<String>) 
     }
 
     println!(
-        "\nTotal: {} skills, {} files, {} text bytes (~{} tokens)",
+        "\nTotal: {} skills, {} files, ~{} tokens startup / ~{} tokens fully loaded",
         skill_names.len(),
         total_files,
-        total_bytes,
+        total_metadata_tokens,
         total_tokens
     );
     if let Some(p) = &profile {
