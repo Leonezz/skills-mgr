@@ -181,7 +181,8 @@ pub async fn import_remote_skill(
     let registry = Registry::new(state.dirs.clone());
     let params_json = serde_json::json!({ "url": url });
 
-    // Use provider-aware import for non-GitHub sources
+    // GitHub uses add_from_remote for richer source metadata (canonical URL,
+    // subpath, git_ref); other providers use the generic add_from_provider path.
     let result = if let Some(provider) = state.providers.detect(&url) {
         if provider.provider_type() == "github" {
             registry.add_from_remote(&url).await
@@ -298,12 +299,8 @@ pub async fn import_from_browse(
         let result = if let Some(ref meta) = staging_meta {
             // Provider-aware path: look up provider and build SkillSource
             if let Some(provider) = state.providers.by_type(&meta.provider_type) {
-                let dest = state.dirs.registry().join(&skill_name);
-                let hash = if dest.exists() {
-                    String::new()
-                } else {
-                    skills_core::registry::compute_tree_hash(&source_dir).unwrap_or_default()
-                };
+                let hash =
+                    skills_core::registry::compute_tree_hash(&source_dir).unwrap_or_default();
                 let skill_source = provider.build_skill_source(meta, subpath, &skill_name, &hash);
                 registry.import_with_source(&source_dir, &skill_name, skill_source)
             } else {
@@ -1719,28 +1716,13 @@ pub struct HubInfo {
     pub hub_type: String,
     pub base_url: String,
     pub enabled: bool,
+    pub page_url: Option<String>,
 }
 
 #[tauri::command]
 pub async fn list_hubs(state: State<'_, AppState>) -> Result<Vec<HubInfo>, String> {
-    let settings = AppSettings::load(&state.dirs.settings_toml()).map_err(|e| e.to_string())?;
-    let mut hubs: Vec<HubInfo> = Vec::new();
-
-    // Merge built-in hubs with user-configured hubs
-    let builtins = skills_core::config::builtin_hubs();
-    for hub in &builtins {
-        hubs.push(hub_to_info(hub));
-    }
-    for hub in &settings.hubs {
-        // User hubs override built-ins with the same name
-        if let Some(pos) = hubs.iter().position(|h| h.name == hub.name) {
-            hubs[pos] = hub_to_info(hub);
-        } else {
-            hubs.push(hub_to_info(hub));
-        }
-    }
-
-    Ok(hubs)
+    let hubs = skills_core::config::merge_hubs(&state.dirs.settings_toml());
+    Ok(hubs.iter().map(hub_to_info).collect())
 }
 
 fn hub_to_info(hub: &HubConfig) -> HubInfo {
@@ -1750,6 +1732,7 @@ fn hub_to_info(hub: &HubConfig) -> HubInfo {
         hub_type: format!("{:?}", hub.hub_type).to_lowercase(),
         base_url: hub.base_url.clone(),
         enabled: hub.enabled,
+        page_url: hub.page_url.clone(),
     }
 }
 

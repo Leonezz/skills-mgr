@@ -2,7 +2,7 @@ mod commands;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use skills_core::config::{AppSettings, ProfilesConfig, builtin_hubs};
+use skills_core::config::ProfilesConfig;
 use skills_core::profiles;
 use skills_core::registry::compute_tree_hash;
 use skills_core::{AppDirs, Database, ProviderRegistry, Registry};
@@ -254,19 +254,7 @@ async fn main() -> Result<()> {
     let db = Database::open(&dirs.database()).await?;
 
     // Build provider registry with built-in + user-configured hubs
-    let all_hubs = {
-        let mut hubs = builtin_hubs();
-        if let Ok(settings) = AppSettings::load(&dirs.settings_toml()) {
-            for user_hub in settings.hubs {
-                if let Some(pos) = hubs.iter().position(|h| h.name == user_hub.name) {
-                    hubs[pos] = user_hub;
-                } else {
-                    hubs.push(user_hub);
-                }
-            }
-        }
-        hubs
-    };
+    let all_hubs = skills_core::config::merge_hubs(&dirs.settings_toml());
     let providers = ProviderRegistry::with_hubs(&all_hubs);
 
     match cli.command {

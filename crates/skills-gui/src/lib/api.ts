@@ -113,6 +113,7 @@ export interface HubInfo {
   hub_type: string
   base_url: string
   enabled: boolean
+  page_url: string | null
 }
 
 export async function listHubs() {

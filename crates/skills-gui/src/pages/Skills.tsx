@@ -578,7 +578,7 @@ export function Skills() {
                         setBrowseError("")
                       }}
                       placeholder={selectedHub
-                        ? `https://${hubs?.find((h) => h.name === selectedHub)?.display_name.toLowerCase() ?? selectedHub}.ai/owner/skill-name`
+                        ? `${hubs?.find((h) => h.name === selectedHub)?.page_url ?? "https://hub.example.com"}/owner/skill-name`
                         : "owner/repo or https://github.com/owner/repo"}
                       className="flex-1"
                       onKeyDown={(e) => {

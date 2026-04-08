@@ -453,6 +453,7 @@ impl SkillsMcpServer {
                 let name = if path.exists() {
                     registry.add_from_local(path)?
                 } else if let Some(provider) = self.providers.detect(source) {
+                    // GitHub uses add_from_remote for richer source metadata
                     if provider.provider_type() == "github" {
                         registry.add_from_remote(source).await?
                     } else {
@@ -1058,6 +1059,12 @@ impl SkillsMcpServer {
                         }
                     }
                 }
+                let failed_count = results
+                    .iter()
+                    .filter(|r| {
+                        matches!(r, skills_core::registry::SkillUpdateResult::Failed { .. })
+                    })
+                    .count();
                 if updated_count > 0 {
                     let _ = logging::log(
                         &self.db,
@@ -1073,11 +1080,17 @@ impl SkillsMcpServer {
                     )
                     .await;
                 }
-                Ok(format!(
-                    "Sync complete: {} updated\n{}",
+                let msg = format!(
+                    "Sync complete: {} updated, {} failed\n{}",
                     updated_count,
+                    failed_count,
                     summary.join("\n")
-                ))
+                );
+                if failed_count > 0 {
+                    anyhow::bail!("{}", msg)
+                } else {
+                    Ok(msg)
+                }
             }
             "link_remote" => {
                 let params = args;

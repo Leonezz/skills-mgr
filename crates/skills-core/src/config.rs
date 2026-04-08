@@ -245,6 +245,22 @@ pub enum HubType {
     Api,
 }
 
+/// Merge built-in hubs with user-configured hubs from settings.
+/// User hubs override built-ins by name; extras are appended.
+pub fn merge_hubs(settings_path: &Path) -> Vec<HubConfig> {
+    let mut hubs = builtin_hubs();
+    if let Ok(settings) = AppSettings::load(settings_path) {
+        for user_hub in settings.hubs {
+            if let Some(pos) = hubs.iter().position(|h| h.name == user_hub.name) {
+                hubs[pos] = user_hub;
+            } else {
+                hubs.push(user_hub);
+            }
+        }
+    }
+    hubs
+}
+
 /// Built-in hub definitions that are always available.
 /// Users can override these or add custom hubs in settings.toml.
 pub fn builtin_hubs() -> Vec<HubConfig> {

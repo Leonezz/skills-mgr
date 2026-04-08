@@ -663,10 +663,11 @@ impl Registry {
         let result = provider.download_for_update(source).await?;
         match result {
             Some((_tmp_dir, skill_dir)) => self.apply_update(name, &skill_dir).await,
-            None => Ok(SkillUpdateResult::Failed {
+            None => Ok(SkillUpdateResult::Skipped {
                 name: name.to_string(),
-                error: format!(
-                    "provider '{}' could not match source (hub_name={}, hub_skill_id={})",
+                reason: format!(
+                    "provider '{}' declined update — source metadata may be incomplete \
+                     (hub_name={}, hub_skill_id={})",
                     provider_type,
                     source.hub_name.as_deref().unwrap_or("<none>"),
                     source.hub_skill_id.as_deref().unwrap_or("<none>"),
@@ -676,10 +677,12 @@ impl Registry {
     }
 
     /// Shared logic: compare hashes, replace if changed, update sources.toml.
+    ///
+    /// Loads sources.toml once to read the old hash and (if changed) update it.
     async fn apply_update(&self, name: &str, skill_dir: &Path) -> Result<SkillUpdateResult> {
         let new_hash = compute_tree_hash(skill_dir)?;
 
-        let sources = SourcesConfig::load(&self.dirs.sources_toml())
+        let mut sources = SourcesConfig::load(&self.dirs.sources_toml())
             .context("Failed to load sources.toml — file may be corrupted")?;
         let old_hash = sources
             .skills
@@ -700,8 +703,7 @@ impl Registry {
         }
         copy_dir_recursive(skill_dir, &dest)?;
 
-        // Update sources.toml
-        let mut sources = SourcesConfig::load(&self.dirs.sources_toml()).unwrap_or_default();
+        // Update hash in the already-loaded sources config
         if let Some(entry) = sources.skills.get_mut(name) {
             entry.hash = Some(new_hash.clone());
             entry.updated_at = Some(

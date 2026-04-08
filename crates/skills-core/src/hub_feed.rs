@@ -47,22 +47,23 @@ pub struct FeaturedFeed {
 /// for the actual content download via the existing GitHub machinery.
 pub struct FeedProvider {
     hub: HubConfig,
+    client: reqwest::Client,
 }
 
 impl FeedProvider {
     pub fn new(hub: HubConfig) -> Self {
-        Self { hub }
+        let client = reqwest::Client::builder()
+            .user_agent("skills-mgr/0.1")
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .expect("Failed to create HTTP client");
+        Self { hub, client }
     }
 
     /// Fetch and parse the feed from the configured URL.
     async fn fetch_feed(&self) -> Result<FeaturedFeed> {
-        let client = reqwest::Client::builder()
-            .user_agent("skills-mgr/0.1")
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .context("Failed to create HTTP client")?;
-
-        let response = client
+        let response = self
+            .client
             .get(&self.hub.base_url)
             .send()
             .await
@@ -105,6 +106,9 @@ impl FeedProvider {
     fn extract_slug_from_url(&self, url: &str) -> Option<String> {
         let page_url = self.hub.page_url.as_deref()?;
         let path = url.strip_prefix(page_url)?;
+        // Strip query params and fragments before extracting slug
+        let path = path.split('?').next().unwrap_or(path);
+        let path = path.split('#').next().unwrap_or(path);
         // path is e.g. "/pskoett/self-improving-agent" or "/pskoett/self-improving-agent/"
         path.trim_matches('/')
             .rsplit('/')
@@ -125,8 +129,27 @@ impl FeedProvider {
         false
     }
 
+    /// Validate that a slug contains only safe characters (alphanumeric, hyphens, underscores).
+    fn validate_slug(slug: &str) -> Result<()> {
+        if slug.is_empty() {
+            bail!("Skill slug is empty");
+        }
+        if !slug
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        {
+            bail!(
+                "Invalid slug '{}': must contain only alphanumeric characters, hyphens, or underscores",
+                slug
+            );
+        }
+        Ok(())
+    }
+
     /// Download a skill ZIP from the hub's download API and extract to a temp dir.
     async fn download_zip(&self, slug: &str) -> Result<(tempfile::TempDir, PathBuf)> {
+        Self::validate_slug(slug)?;
+
         let api_url = self
             .hub
             .download_api_url
@@ -136,13 +159,8 @@ impl FeedProvider {
 
         tracing::info!(url = %api_url, slug = %slug, "Downloading skill ZIP from hub");
 
-        let client = reqwest::Client::builder()
-            .user_agent("skills-mgr/0.1")
-            .timeout(std::time::Duration::from_secs(60))
-            .build()
-            .context("Failed to create HTTP client")?;
-
-        let response = client
+        let response = self
+            .client
             .get(&api_url)
             .send()
             .await
@@ -169,6 +187,10 @@ impl FeedProvider {
         let cursor = std::io::Cursor::new(&bytes);
         let mut archive = zip::ZipArchive::new(cursor).context("Failed to open ZIP archive")?;
 
+        let extract_canonical = extract_dir
+            .canonicalize()
+            .unwrap_or_else(|_| extract_dir.clone());
+
         for i in 0..archive.len() {
             let mut file = archive.by_index(i)?;
             let name = file.name().to_string();
@@ -178,11 +200,21 @@ impl FeedProvider {
                 continue;
             }
 
-            // Strip leading directory if all files share one (common in ZIP archives)
             let out_path = extract_dir.join(&name);
             if let Some(parent) = out_path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
+
+            // Guard against path traversal (e.g., "../../etc/malicious" in ZIP)
+            let out_canonical = out_path.canonicalize().unwrap_or_else(|_| out_path.clone());
+            if !out_canonical.starts_with(&extract_canonical) {
+                tracing::warn!(
+                    path = %name,
+                    "Skipping ZIP entry with path traversal"
+                );
+                continue;
+            }
+
             let mut outfile = std::fs::File::create(&out_path)?;
             std::io::copy(&mut file, &mut outfile)?;
         }
@@ -474,6 +506,16 @@ mod tests {
             provider.extract_slug_from_url("https://test-feed.example.com/owner/my-skill/"),
             Some("my-skill".to_string())
         );
+        // Query params and fragments are stripped
+        assert_eq!(
+            provider
+                .extract_slug_from_url("https://test-feed.example.com/owner/my-skill?ref=latest"),
+            Some("my-skill".to_string())
+        );
+        assert_eq!(
+            provider.extract_slug_from_url("https://test-feed.example.com/owner/my-skill#readme"),
+            Some("my-skill".to_string())
+        );
         assert_eq!(
             provider.extract_slug_from_url("https://other-site.com/owner/skill"),
             None
@@ -547,5 +589,15 @@ mod tests {
         assert_eq!(feed.skills[0].downloads, Some(100));
         assert_eq!(feed.skills[1].slug, "pdf");
         assert!(feed.skills[1].source_url.contains("github.com"));
+    }
+
+    #[test]
+    fn test_validate_slug() {
+        assert!(FeedProvider::validate_slug("code-review").is_ok());
+        assert!(FeedProvider::validate_slug("my_skill_123").is_ok());
+        assert!(FeedProvider::validate_slug("").is_err());
+        assert!(FeedProvider::validate_slug("../etc/passwd").is_err());
+        assert!(FeedProvider::validate_slug("skill?ref=latest").is_err());
+        assert!(FeedProvider::validate_slug("skill&foo=bar").is_err());
     }
 }

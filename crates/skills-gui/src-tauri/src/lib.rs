@@ -1,7 +1,7 @@
 mod commands;
 
 use commands::AppState;
-use skills_core::config::{builtin_hubs, AppSettings};
+use skills_core::config::merge_hubs;
 use skills_core::{AppDirs, Database, ProviderRegistry};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
@@ -43,19 +43,7 @@ pub fn run() {
     tracing::info!("skills-gui starting up, base_dir={}", dirs.base().display());
 
     // Build provider registry: merge built-in hubs with user-configured hubs
-    let all_hubs = {
-        let mut hubs = builtin_hubs();
-        if let Ok(settings) = AppSettings::load(&dirs.settings_toml()) {
-            for user_hub in settings.hubs {
-                if let Some(pos) = hubs.iter().position(|h| h.name == user_hub.name) {
-                    hubs[pos] = user_hub;
-                } else {
-                    hubs.push(user_hub);
-                }
-            }
-        }
-        hubs
-    };
+    let all_hubs = merge_hubs(&dirs.settings_toml());
     let providers = ProviderRegistry::with_hubs(&all_hubs);
 
     tauri::Builder::default()

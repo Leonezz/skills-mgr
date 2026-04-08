@@ -118,6 +118,8 @@ pub async fn run(
             } else if let Some(provider) = providers.detect(&source) {
                 let provider_type = provider.provider_type();
                 println!("Downloading via {} provider...", provider_type);
+                // GitHub uses add_from_remote for richer source metadata
+                // (canonical URL, subpath, git_ref) needed for update/sync.
                 let name = if provider_type == "github" {
                     registry.add_from_remote(&source).await?
                 } else {
@@ -307,18 +309,7 @@ pub async fn run(
             }
         }
         SkillAction::Hubs => {
-            let builtins = skills_core::config::builtin_hubs();
-            let settings =
-                skills_core::config::AppSettings::load(&dirs.settings_toml()).unwrap_or_default();
-
-            let mut hubs = builtins;
-            for user_hub in &settings.hubs {
-                if let Some(pos) = hubs.iter().position(|h| h.name == user_hub.name) {
-                    hubs[pos] = user_hub.clone();
-                } else {
-                    hubs.push(user_hub.clone());
-                }
-            }
+            let hubs = skills_core::config::merge_hubs(&dirs.settings_toml());
 
             if hubs.is_empty() {
                 println!("No hubs configured.");
