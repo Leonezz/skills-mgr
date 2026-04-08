@@ -4,13 +4,14 @@ use serde_json::{Value, json};
 use skills_core::config::{AgentDef, AgentsConfig, ProfileDef, ProfilesConfig};
 use skills_core::logging::{self, LogEntry, Source};
 use skills_core::profiles;
-use skills_core::{AppDirs, Database, Registry};
+use skills_core::{AppDirs, Database, ProviderRegistry, Registry};
 
 /// MCP Server for skills-mgr.
 /// Implements the Model Context Protocol over stdio (JSON-RPC 2.0).
 pub struct SkillsMcpServer {
     dirs: AppDirs,
     db: Database,
+    providers: ProviderRegistry,
 }
 
 #[derive(Deserialize)]
@@ -38,8 +39,12 @@ struct JsonRpcError {
 }
 
 impl SkillsMcpServer {
-    pub fn new(dirs: AppDirs, db: Database) -> Self {
-        Self { dirs, db }
+    pub fn new(dirs: AppDirs, db: Database, providers: ProviderRegistry) -> Self {
+        Self {
+            dirs,
+            db,
+            providers,
+        }
     }
 
     /// Run the MCP server on stdio.
@@ -174,6 +179,17 @@ impl SkillsMcpServer {
                     "type": "object",
                     "properties": { "name": { "type": "string" } },
                     "required": ["name"]
+                }
+            },
+            {
+                "name": "add_skill",
+                "description": "Add a skill from a local path or remote URL (GitHub, ClawHub, or other hub)",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "source": { "type": "string", "description": "Local path, GitHub URL/shorthand, or hub URL (e.g. https://clawhub.ai/owner/skill)" }
+                    },
+                    "required": ["source"]
                 }
             },
             {
@@ -331,7 +347,7 @@ impl SkillsMcpServer {
             },
             {
                 "name": "update_skill",
-                "description": "Update a git-sourced skill from its tracked remote and refresh all placements",
+                "description": "Update a remote-sourced skill (git or hub) and refresh all placements",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -342,7 +358,7 @@ impl SkillsMcpServer {
             },
             {
                 "name": "sync_skills",
-                "description": "Sync all git-sourced skills from their tracked remotes",
+                "description": "Sync all remote-sourced skills (git and hub) from their tracked remotes",
                 "inputSchema": { "type": "object", "properties": {} }
             },
             {
@@ -380,11 +396,14 @@ impl SkillsMcpServer {
                 Ok(serde_json::to_string_pretty(&items)?)
             }
             "create_skill" => {
-                let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let name = args
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .context("name required")?;
                 let desc = args
                     .get("description")
                     .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                    .context("description required")?;
                 let registry = Registry::new(self.dirs.clone());
                 registry.create(name, desc)?;
                 let _ = logging::log(
@@ -403,7 +422,10 @@ impl SkillsMcpServer {
                 Ok(format!("Created skill '{}'", name))
             }
             "remove_skill" => {
-                let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let name = args
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .context("name required")?;
                 let registry = Registry::new(self.dirs.clone());
                 registry.remove(name)?;
                 let _ = logging::log(
@@ -421,12 +443,51 @@ impl SkillsMcpServer {
                 .await;
                 Ok(format!("Removed skill '{}'", name))
             }
+            "add_skill" => {
+                let source = args
+                    .get("source")
+                    .and_then(|v| v.as_str())
+                    .context("source required")?;
+                let registry = Registry::new(self.dirs.clone());
+                let path = std::path::Path::new(source);
+                let name = if path.exists() {
+                    registry.add_from_local(path)?
+                } else if let Some(provider) = self.providers.detect(source) {
+                    if provider.provider_type() == "github" {
+                        registry.add_from_remote(source).await?
+                    } else {
+                        registry.add_from_provider(source, provider).await?
+                    }
+                } else {
+                    anyhow::bail!(
+                        "Source '{}' is not a local path or recognized remote URL",
+                        source
+                    );
+                };
+                let _ = logging::log(
+                    &self.db,
+                    LogEntry {
+                        source: Source::Mcp,
+                        agent_name: None,
+                        operation: "skill_add",
+                        params: None,
+                        project_path: None,
+                        result: "success",
+                        details: &format!("Added skill '{}' from {}", name, source),
+                    },
+                )
+                .await;
+                Ok(format!("Added skill '{}' from {}", name, source))
+            }
             "list_profiles" => {
                 let config = ProfilesConfig::load(&self.dirs.profiles_toml())?;
                 Ok(serde_json::to_string_pretty(&config)?)
             }
             "create_profile" => {
-                let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let name = args
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .context("name required")?;
                 let skills: Vec<String> = args
                     .get("skills")
                     .and_then(|v| serde_json::from_value(v.clone()).ok())
@@ -462,9 +523,14 @@ impl SkillsMcpServer {
                 Ok(format!("Created profile '{}'", name))
             }
             "delete_profile" => {
-                let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let name = args
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .context("name required")?;
                 let mut config = ProfilesConfig::load(&self.dirs.profiles_toml())?;
-                config.profiles.remove(name);
+                if config.profiles.remove(name).is_none() {
+                    anyhow::bail!("Profile '{}' not found", name);
+                }
                 config.save(&self.dirs.profiles_toml())?;
                 let _ = logging::log(
                     &self.db,
@@ -557,11 +623,14 @@ impl SkillsMcpServer {
                 Ok(serde_json::to_string_pretty(&presets)?)
             }
             "activate_profile" => {
-                let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let name = args
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .context("name required")?;
                 let project_path = args
                     .get("project_path")
                     .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                    .context("project_path required")?;
                 let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
                 let dry_run = args
                     .get("dry_run")
@@ -634,11 +703,14 @@ impl SkillsMcpServer {
                 }
             }
             "deactivate_profile" => {
-                let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let name = args
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .context("name required")?;
                 let project_path = args
                     .get("project_path")
                     .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                    .context("project_path required")?;
                 let dry_run = args
                     .get("dry_run")
                     .and_then(|v| v.as_bool())
@@ -689,11 +761,14 @@ impl SkillsMcpServer {
                 }
             }
             "switch_profile" => {
-                let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let name = args
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .context("name required")?;
                 let project_path = args
                     .get("project_path")
                     .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                    .context("project_path required")?;
                 let from = args.get("from").and_then(|v| v.as_str());
                 let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
                 let dry_run = args
@@ -852,7 +927,7 @@ impl SkillsMcpServer {
                 let project_path = args
                     .get("project_path")
                     .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                    .context("project_path required")?;
                 let profiles_config = ProfilesConfig::load(&self.dirs.profiles_toml())?;
                 let s = skills_core::placements::status(&self.db, &profiles_config, project_path)
                     .await?;
@@ -913,7 +988,9 @@ impl SkillsMcpServer {
             "update_skill" => {
                 let name = args["name"].as_str().context("name required")?;
                 let registry = Registry::new(self.dirs.clone());
-                let result = registry.update_from_remote(name).await?;
+                let result = registry
+                    .update_from_remote(name, Some(&self.providers))
+                    .await?;
                 match &result {
                     skills_core::registry::SkillUpdateResult::Updated {
                         name, new_hash, ..
@@ -948,16 +1025,16 @@ impl SkillsMcpServer {
                         Ok(format!("'{}' is already up to date", name))
                     }
                     skills_core::registry::SkillUpdateResult::Skipped { name, reason } => {
-                        Ok(format!("'{}' skipped: {}", name, reason))
+                        anyhow::bail!("'{}' skipped: {}", name, reason)
                     }
                     skills_core::registry::SkillUpdateResult::Failed { name, error } => {
-                        Ok(format!("'{}' failed: {}", name, error))
+                        anyhow::bail!("'{}' failed: {}", name, error)
                     }
                 }
             }
             "sync_skills" => {
                 let registry = Registry::new(self.dirs.clone());
-                let results = registry.sync_all().await?;
+                let results = registry.sync_all(Some(&self.providers)).await?;
                 let mut summary = Vec::new();
                 let mut updated_count = 0;
                 for result in &results {

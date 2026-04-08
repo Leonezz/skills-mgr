@@ -1,15 +1,19 @@
 use serde::{Deserialize, Serialize};
-use skills_core::config::{AgentDef, AgentsConfig, AppSettings, ProfileDef, ProfilesConfig};
+use skills_core::config::{
+    AgentDef, AgentsConfig, AppSettings, HubConfig, ProfileDef, ProfilesConfig,
+};
 use skills_core::logging::{self, LogEntry, Source};
 use skills_core::placements;
 use skills_core::placements::GLOBAL_PROJECT_PATH;
 use skills_core::profiles;
-use skills_core::{AppDirs, Database, Registry};
+use skills_core::provider::StagingMeta;
+use skills_core::{AppDirs, Database, ProviderRegistry, Registry};
 use tauri::State;
 
 pub struct AppState {
     pub dirs: AppDirs,
     pub db: Database,
+    pub providers: ProviderRegistry,
 }
 
 #[derive(Serialize)]
@@ -176,7 +180,20 @@ pub async fn import_remote_skill(
     tracing::info!(url = %url, "Starting remote skill import");
     let registry = Registry::new(state.dirs.clone());
     let params_json = serde_json::json!({ "url": url });
-    match registry.add_from_remote(&url).await {
+
+    // Use provider-aware import for non-GitHub sources
+    let result = if let Some(provider) = state.providers.detect(&url) {
+        if provider.provider_type() == "github" {
+            registry.add_from_remote(&url).await
+        } else {
+            registry.add_from_provider(&url, provider).await
+        }
+    } else {
+        // Fall back to GitHub for backwards compatibility
+        registry.add_from_remote(&url).await
+    };
+
+    match result {
         Ok(name) => {
             tracing::info!(skill = %name, "Remote skill imported successfully");
             let _ = logging::log(
@@ -220,15 +237,22 @@ pub async fn browse_remote(
     state: State<'_, AppState>,
     url: String,
 ) -> Result<Vec<serde_json::Value>, String> {
-    tracing::info!(url = %url, "Browsing remote repo");
-    let source = skills_core::remote::parse_github_url(&url).map_err(|e| e.to_string())?;
+    tracing::info!(url = %url, "Browsing remote source");
     let staging_dir = state.dirs.cache().join("staging");
 
-    let skills = skills_core::remote::download_to_staging(&source, &staging_dir)
+    let provider = state
+        .providers
+        .detect(&url)
+        .ok_or_else(|| format!("No provider found for '{}'", url))?;
+
+    tracing::info!(provider = provider.provider_type(), "Detected provider");
+
+    let skills = provider
+        .download_to_staging(&url, &staging_dir)
         .await
         .map_err(|e| e.to_string())?;
 
-    tracing::info!(count = skills.len(), "Found skills in remote repo");
+    tracing::info!(count = skills.len(), "Found skills in remote source");
     Ok(skills
         .into_iter()
         .map(|s| {
@@ -254,12 +278,9 @@ pub async fn import_from_browse(
         return Err("No browse session active. Please browse a repository first.".to_string());
     }
 
-    let meta: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&meta_path).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
-    let owner = meta["owner"].as_str().unwrap_or_default();
-    let repo = meta["repo"].as_str().unwrap_or_default();
-    let git_ref = meta["git_ref"].as_str().unwrap_or("main");
+    // Try provider-agnostic StagingMeta first, fall back to legacy GitHub meta
+    let meta_str = std::fs::read_to_string(&meta_path).map_err(|e| e.to_string())?;
+    let staging_meta: Option<StagingMeta> = serde_json::from_str(&meta_str).ok();
 
     let registry = Registry::new(state.dirs.clone());
     let mut imported: Vec<String> = Vec::new();
@@ -273,14 +294,50 @@ pub async fn import_from_browse(
             .unwrap_or_default();
 
         tracing::info!(skill = %skill_name, subpath = %subpath, "Importing from browse");
-        match registry.import_from_extracted_dir(
-            &source_dir,
-            &skill_name,
-            owner,
-            repo,
-            git_ref,
-            subpath,
-        ) {
+
+        let result = if let Some(ref meta) = staging_meta {
+            // Provider-aware path: look up provider and build SkillSource
+            if let Some(provider) = state.providers.by_type(&meta.provider_type) {
+                let dest = state.dirs.registry().join(&skill_name);
+                let hash = if dest.exists() {
+                    String::new()
+                } else {
+                    skills_core::registry::compute_tree_hash(&source_dir).unwrap_or_default()
+                };
+                let skill_source = provider.build_skill_source(meta, subpath, &skill_name, &hash);
+                registry.import_with_source(&source_dir, &skill_name, skill_source)
+            } else {
+                // Unknown provider type — fall back to legacy
+                let legacy: serde_json::Value = serde_json::from_str(&meta_str).unwrap_or_default();
+                let owner = legacy["owner"].as_str().unwrap_or_default();
+                let repo = legacy["repo"].as_str().unwrap_or_default();
+                let git_ref = legacy["git_ref"].as_str().unwrap_or("main");
+                registry.import_from_extracted_dir(
+                    &source_dir,
+                    &skill_name,
+                    owner,
+                    repo,
+                    git_ref,
+                    subpath,
+                )
+            }
+        } else {
+            // Legacy GitHub-only meta.json
+            let legacy: serde_json::Value = serde_json::from_str(&meta_str).unwrap_or_default();
+            let owner = legacy["owner"].as_str().unwrap_or_default();
+            let repo = legacy["repo"].as_str().unwrap_or_default();
+            let git_ref = legacy["git_ref"].as_str().unwrap_or("main");
+            registry.import_from_extracted_dir(
+                &source_dir,
+                &skill_name,
+                owner,
+                repo,
+                git_ref,
+                subpath,
+            )
+        };
+
+        match result {
             Ok(()) => imported.push(skill_name),
             Err(e) => {
                 tracing::error!(skill = %skill_name, error = %e, "Failed to import");
@@ -755,6 +812,15 @@ pub async fn edit_profile(
     config
         .save(&state.dirs.profiles_toml())
         .map_err(|e| e.to_string())?;
+
+    // Refresh placements for all projects where this profile is active
+    let agents_config =
+        skills_core::AgentsConfig::load(&state.dirs.agents_toml()).map_err(|e| e.to_string())?;
+    let refreshed =
+        placements::refresh_profile(&state.dirs, &state.db, &config, &agents_config, &name)
+            .await
+            .map_err(|e| e.to_string())?;
+
     let _ = logging::log(
         &state.db,
         LogEntry {
@@ -764,11 +830,21 @@ pub async fn edit_profile(
             params: None,
             project_path: None,
             result: "success",
-            details: &format!("Updated profile '{}'", name),
+            details: &format!(
+                "Updated profile '{}', {} projects refreshed",
+                name, refreshed
+            ),
         },
     )
     .await;
-    Ok(format!("Updated profile '{}'", name))
+    if refreshed > 0 {
+        Ok(format!(
+            "Updated profile '{}' — refreshed {} project(s)",
+            name, refreshed
+        ))
+    } else {
+        Ok(format!("Updated profile '{}'", name))
+    }
 }
 
 #[tauri::command]
@@ -1081,7 +1157,7 @@ pub async fn deactivate_profile(
 pub async fn sync_skill(state: State<'_, AppState>, name: String) -> Result<String, String> {
     let registry = Registry::new(state.dirs.clone());
     let result = registry
-        .update_from_remote(&name)
+        .update_from_remote(&name, Some(&state.providers))
         .await
         .map_err(|e| e.to_string())?;
     match result {
@@ -1124,7 +1200,10 @@ pub async fn sync_skill(state: State<'_, AppState>, name: String) -> Result<Stri
 #[tauri::command]
 pub async fn sync_all_skills(state: State<'_, AppState>) -> Result<String, String> {
     let registry = Registry::new(state.dirs.clone());
-    let results = registry.sync_all().await.map_err(|e| e.to_string())?;
+    let results = registry
+        .sync_all(Some(&state.providers))
+        .await
+        .map_err(|e| e.to_string())?;
     let mut updated = 0;
     for result in &results {
         if let skills_core::registry::SkillUpdateResult::Updated { name, .. } = result {
@@ -1629,4 +1708,86 @@ pub async fn get_recent_logs(
         })
         .collect();
     Ok(serde_json::Value::Array(entries))
+}
+
+// --- Hubs ---
+
+#[derive(Serialize)]
+pub struct HubInfo {
+    pub name: String,
+    pub display_name: String,
+    pub hub_type: String,
+    pub base_url: String,
+    pub enabled: bool,
+}
+
+#[tauri::command]
+pub async fn list_hubs(state: State<'_, AppState>) -> Result<Vec<HubInfo>, String> {
+    let settings = AppSettings::load(&state.dirs.settings_toml()).map_err(|e| e.to_string())?;
+    let mut hubs: Vec<HubInfo> = Vec::new();
+
+    // Merge built-in hubs with user-configured hubs
+    let builtins = skills_core::config::builtin_hubs();
+    for hub in &builtins {
+        hubs.push(hub_to_info(hub));
+    }
+    for hub in &settings.hubs {
+        // User hubs override built-ins with the same name
+        if let Some(pos) = hubs.iter().position(|h| h.name == hub.name) {
+            hubs[pos] = hub_to_info(hub);
+        } else {
+            hubs.push(hub_to_info(hub));
+        }
+    }
+
+    Ok(hubs)
+}
+
+fn hub_to_info(hub: &HubConfig) -> HubInfo {
+    HubInfo {
+        name: hub.name.clone(),
+        display_name: hub.display_name.clone(),
+        hub_type: format!("{:?}", hub.hub_type).to_lowercase(),
+        base_url: hub.base_url.clone(),
+        enabled: hub.enabled,
+    }
+}
+
+#[tauri::command]
+pub async fn browse_hub(
+    state: State<'_, AppState>,
+    hub_name: String,
+) -> Result<Vec<serde_json::Value>, String> {
+    tracing::info!(hub = %hub_name, "Browsing hub");
+
+    // Use the hub:<name> convention that FeedProvider.can_handle() expects
+    let input = format!("hub:{}", hub_name);
+    let staging_dir = state.dirs.cache().join("staging");
+
+    let provider = state
+        .providers
+        .detect(&input)
+        .ok_or_else(|| format!("No provider found for hub '{}'", hub_name))?;
+
+    tracing::info!(
+        provider = provider.provider_type(),
+        "Using provider for hub browse"
+    );
+
+    let skills = provider
+        .download_to_staging(&input, &staging_dir)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    tracing::info!(count = skills.len(), "Found skills in hub");
+    Ok(skills
+        .into_iter()
+        .map(|s| {
+            serde_json::json!({
+                "name": s.name,
+                "description": s.description,
+                "subpath": s.subpath,
+            })
+        })
+        .collect())
 }

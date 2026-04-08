@@ -1,7 +1,12 @@
 use anyhow::{Context, Result, bail};
 use flate2::read::GzDecoder;
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use tar::Archive;
+
+use crate::config::{SkillSource, SourceType};
+use crate::provider::{SkillProvider, StagingMeta};
 
 /// Parsed information from a GitHub-style URL.
 #[derive(Debug, Clone)]
@@ -423,6 +428,140 @@ pub fn derive_skill_name(source: &GitHubSource) -> String {
             .to_string()
     } else {
         source.repo.clone()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SkillProvider implementation for GitHub
+// ---------------------------------------------------------------------------
+
+/// Skill provider for GitHub repositories.
+///
+/// Wraps the existing GitHub-specific functions (`parse_github_url`,
+/// `download_github_skill`, etc.) behind the [`SkillProvider`] trait so that
+/// the rest of the codebase can treat GitHub as one of many possible sources.
+pub struct GitHubProvider;
+
+impl SkillProvider for GitHubProvider {
+    fn provider_type(&self) -> &str {
+        "github"
+    }
+
+    fn can_handle(&self, input: &str) -> bool {
+        is_remote_source(input)
+    }
+
+    fn derive_name(&self, input: &str) -> String {
+        match parse_github_url(input) {
+            Ok(source) => derive_skill_name(&source),
+            Err(_) => input.to_string(),
+        }
+    }
+
+    fn download_to_staging<'a>(
+        &'a self,
+        input: &'a str,
+        staging_dir: &'a Path,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<RemoteSkillEntry>>> + Send + 'a>> {
+        Box::pin(async move {
+            let source = parse_github_url(input)?;
+
+            // Delegate to existing staging logic
+            let skills = download_to_staging(&source, staging_dir).await?;
+
+            // Overwrite meta.json with provider-agnostic StagingMeta
+            let meta = StagingMeta {
+                provider_type: "github".to_string(),
+                source_input: input.to_string(),
+                provider_data: serde_json::json!({
+                    "owner": source.owner,
+                    "repo": source.repo,
+                    "git_ref": source.git_ref,
+                    "subpath": source.subpath,
+                }),
+            };
+            std::fs::write(
+                staging_dir.join("meta.json"),
+                serde_json::to_string_pretty(&meta)?,
+            )?;
+
+            Ok(skills)
+        })
+    }
+
+    fn download_skill<'a>(
+        &'a self,
+        input: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(tempfile::TempDir, PathBuf)>> + Send + 'a>> {
+        Box::pin(async move {
+            let source = parse_github_url(input)?;
+            download_github_skill(&source).await
+        })
+    }
+
+    fn build_skill_source(
+        &self,
+        meta: &StagingMeta,
+        subpath: &str,
+        _skill_name: &str,
+        hash: &str,
+    ) -> SkillSource {
+        let data = &meta.provider_data;
+        let owner = data["owner"].as_str().unwrap_or_default();
+        let repo = data["repo"].as_str().unwrap_or_default();
+        let git_ref = data["git_ref"].as_str().unwrap_or("main");
+
+        let canonical = if subpath.is_empty() {
+            format!("https://github.com/{}/{}", owner, repo)
+        } else {
+            format!(
+                "https://github.com/{}/{}/tree/{}/{}",
+                owner, repo, git_ref, subpath
+            )
+        };
+
+        SkillSource {
+            source_type: SourceType::Git,
+            url: Some(canonical),
+            path: if subpath.is_empty() {
+                None
+            } else {
+                Some(subpath.to_string())
+            },
+            git_ref: Some(git_ref.to_string()),
+            hash: Some(hash.to_string()),
+            updated_at: Some(
+                chrono::Utc::now()
+                    .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+                    .to_string(),
+            ),
+            original_agent_path: None,
+            provider: Some("github".to_string()),
+            hub_name: None,
+            hub_skill_id: None,
+        }
+    }
+
+    fn download_for_update<'a>(
+        &'a self,
+        source: &'a SkillSource,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<(tempfile::TempDir, PathBuf)>>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            // Only handle Git-sourced skills (or skills explicitly marked as github provider)
+            if source.source_type != SourceType::Git {
+                return Ok(None);
+            }
+
+            let url = match &source.url {
+                Some(u) => u.clone(),
+                None => return Ok(None),
+            };
+
+            let github_source = parse_github_url(&url)?;
+            let result = download_github_skill(&github_source).await?;
+            Ok(Some(result))
+        })
     }
 }
 

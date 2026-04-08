@@ -19,7 +19,7 @@ import {
   SheetBody,
   SheetFooter,
 } from "@/components/ui/sheet"
-import { listSkills, createSkill, removeSkill, importSkill, importRemoteSkill, browseRemote, importFromBrowse, openSkillDir, updateSkill, syncSkill, syncAllSkills, scanSkills, delegateSkills, linkRemote, unlinkRemote, listProfiles } from "@/lib/api"
+import { listSkills, createSkill, removeSkill, importSkill, importRemoteSkill, browseRemote, importFromBrowse, openSkillDir, updateSkill, syncSkill, syncAllSkills, scanSkills, delegateSkills, linkRemote, unlinkRemote, listProfiles, listHubs } from "@/lib/api"
 import type { RemoteSkillEntry, DelegateRequest } from "@/lib/api"
 import { open } from "@tauri-apps/plugin-dialog"
 import { toast } from "sonner"
@@ -74,6 +74,12 @@ export function Skills() {
     queryFn: listProfiles,
   })
 
+  // Hubs query
+  const { data: hubs } = useQuery({
+    queryKey: ["hubs"],
+    queryFn: listHubs,
+  })
+
   // Delegation state
   const [showDelegate, setShowDelegate] = useState(false)
   const [delegateSelected, setDelegateSelected] = useState<Set<string>>(new Set())
@@ -101,6 +107,9 @@ export function Skills() {
   const [selectedRemote, setSelectedRemote] = useState<Set<string>>(new Set())
   const [browseLoading, setBrowseLoading] = useState(false)
   const [browseError, setBrowseError] = useState("")
+
+  // Hub browsing state
+  const [selectedHub, setSelectedHub] = useState("")
 
   // Conflict resolution state
   const [conflictAction, setConflictAction] = useState<"overwrite" | "skip">("overwrite")
@@ -293,6 +302,7 @@ export function Skills() {
     setBrowseLoading(false)
     setBrowseError("")
     setConflictAction("overwrite")
+    setSelectedHub("")
   }
 
   async function handleBrowseRemote() {
@@ -303,16 +313,15 @@ export function Skills() {
     setSelectedRemote(new Set())
     try {
       const skills = await browseRemote(remoteUrl.trim())
+
       if (skills.length === 0) {
         setBrowseError("No skills found in this repository.")
       } else if (skills.length === 1) {
         // Single skill — check conflict
         if (existingNames.has(skills[0].name)) {
-          // Show as selectable so user can decide
           setRemoteSkills(skills)
           setSelectedRemote(new Set(skills.map((s) => s.subpath)))
         } else {
-          // No conflict — import directly from staging
           const msg = await importFromBrowse([skills[0].subpath])
           toast.success(msg)
           queryClient.invalidateQueries({ queryKey: ["skills"] })
@@ -322,6 +331,22 @@ export function Skills() {
         setRemoteSkills(skills)
         setSelectedRemote(new Set(skills.map((s) => s.subpath)))
       }
+    } catch (e) {
+      setBrowseError(String(e))
+    } finally {
+      setBrowseLoading(false)
+    }
+  }
+
+  async function handleHubImport() {
+    if (!remoteUrl.trim()) return
+    setBrowseLoading(true)
+    setBrowseError("")
+    try {
+      const msg = await importRemoteSkill(remoteUrl.trim())
+      toast.success(msg)
+      queryClient.invalidateQueries({ queryKey: ["skills"] })
+      closeAdd()
     } catch (e) {
       setBrowseError(String(e))
     } finally {
@@ -341,6 +366,14 @@ export function Skills() {
 
   function formatSourceDisplay(skill: Skill): string {
     if (!skill.source_type) return "Local file"
+    if (skill.source_type === "hub") {
+      // Hub-sourced skills show hub name
+      const parts: string[] = ["hub"]
+      if (skill.source_url) {
+        parts.push(skill.source_url)
+      }
+      return parts.join(" \u00b7 ")
+    }
     const parts: string[] = [skill.source_type]
     if (skill.source_url) {
       // Shorten GitHub URLs: https://github.com/owner/repo → owner/repo
@@ -365,7 +398,7 @@ export function Skills() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            {skills?.some((s) => s.source_type === "git") && (
+            {skills?.some((s) => s.source_type === "git" || s.source_type === "hub") && (
               <Button
                 variant="outline"
                 onClick={() => syncAllMutation.mutate()}
@@ -446,7 +479,7 @@ export function Skills() {
               {([
                 { key: "create" as const, label: "Create", icon: Plus },
                 { key: "local" as const, label: "Local Import", icon: FolderOpen },
-                { key: "remote" as const, label: "GitHub Import", icon: Globe },
+                { key: "remote" as const, label: "Remote Import", icon: Globe },
               ]).map(({ key, label, icon: Icon }) => (
                 <button
                   key={key}
@@ -514,28 +547,57 @@ export function Skills() {
             {/* Remote import mode */}
             {addMode === "remote" && (
               <div className="space-y-3">
+                {/* Source type + URL input */}
                 <div className="space-y-2">
-                  <Label>GitHub URL or Shorthand</Label>
-                  <Input
-                    value={remoteUrl}
-                    onChange={(e) => {
-                      setRemoteUrl(e.target.value)
-                      setRemoteSkills([])
-                      setSelectedRemote(new Set())
-                      setBrowseError("")
-                    }}
-                    placeholder="owner/repo or https://github.com/owner/repo"
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault()
-                        handleBrowseRemote()
-                      }
-                    }}
-                  />
+                  <Label>Source</Label>
+                  <div className="flex gap-2">
+                    <select
+                      value={selectedHub}
+                      onChange={(e) => {
+                        setSelectedHub(e.target.value)
+                        setRemoteUrl("")
+                        setRemoteSkills([])
+                        setSelectedRemote(new Set())
+                        setBrowseError("")
+                      }}
+                      className="flex h-9 w-[160px] shrink-0 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    >
+                      <option value="">GitHub</option>
+                      {hubs?.filter((h) => h.enabled).map((h) => (
+                        <option key={h.name} value={h.name}>
+                          {h.display_name}
+                        </option>
+                      ))}
+                    </select>
+                    <Input
+                      value={remoteUrl}
+                      onChange={(e) => {
+                        setRemoteUrl(e.target.value)
+                        setRemoteSkills([])
+                        setSelectedRemote(new Set())
+                        setBrowseError("")
+                      }}
+                      placeholder={selectedHub
+                        ? `https://${hubs?.find((h) => h.name === selectedHub)?.display_name.toLowerCase() ?? selectedHub}.ai/owner/skill-name`
+                        : "owner/repo or https://github.com/owner/repo"}
+                      className="flex-1"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault()
+                          if (selectedHub) {
+                            handleHubImport()
+                          } else {
+                            handleBrowseRemote()
+                          }
+                        }
+                      }}
+                    />
+                  </div>
                   {!remoteSkills.length && !browseLoading && !browseError && (
                     <p className="text-xs text-muted-foreground">
-                      Enter a repository URL and click Import. Single-skill repos are imported directly.
-                      Multi-skill collections let you pick which skills to import.
+                      {selectedHub
+                        ? `Paste a ${hubs?.find((h) => h.name === selectedHub)?.display_name ?? "hub"} skill URL to import it directly.`
+                        : "Enter a repository URL and click Import. Multi-skill repos let you pick which to import."}
                     </p>
                   )}
                 </div>
@@ -674,7 +736,9 @@ export function Skills() {
             </Button>
             <Button
               onClick={() => {
-                if (addMode === "remote" && remoteSkills.length === 0) {
+                if (addMode === "remote" && selectedHub) {
+                  handleHubImport()
+                } else if (addMode === "remote" && remoteSkills.length === 0) {
                   handleBrowseRemote()
                 } else {
                   createMutation.mutate()
@@ -686,17 +750,19 @@ export function Skills() {
                 (addMode === "create" && !newName) ||
                 (addMode === "local" && !newSourcePath) ||
                 (addMode === "remote" && !remoteUrl) ||
-                (addMode === "remote" && remoteSkills.length > 0 && selectedRemote.size === 0)
+                (addMode === "remote" && !selectedHub && remoteSkills.length > 0 && selectedRemote.size === 0)
               }
             >
               {browseLoading
-                ? "Scanning..."
+                ? "Importing..."
                 : createMutation.isPending
                   ? "Importing..."
                   : addMode === "remote"
-                    ? remoteSkills.length > 0
-                      ? `Import ${selectedRemote.size} Skill${selectedRemote.size !== 1 ? "s" : ""}`
-                      : "Import from GitHub"
+                    ? selectedHub
+                      ? "Import from Hub"
+                      : remoteSkills.length > 0
+                        ? `Import ${selectedRemote.size} Skill${selectedRemote.size !== 1 ? "s" : ""}`
+                        : "Import"
                   : addMode === "local" ? "Import Skill"
                   : "Create Skill"}
             </Button>
@@ -860,7 +926,7 @@ export function Skills() {
               <ExternalLink className="h-4 w-4" />
               Open in Finder
             </Button>
-            {detail?.source_type === "git" ? (
+            {detail?.source_type === "git" || detail?.source_type === "hub" ? (
               <>
                 <Button
                   variant="outline"

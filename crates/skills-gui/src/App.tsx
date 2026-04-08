@@ -11,7 +11,14 @@ import { Agents } from "./pages/Agents"
 import { ActivityLog } from "./pages/ActivityLog"
 import { Settings } from "./pages/Settings"
 
-const queryClient = new QueryClient()
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 2_000,
+      refetchInterval: 5_000,
+    },
+  },
+})
 
 function App() {
   return (

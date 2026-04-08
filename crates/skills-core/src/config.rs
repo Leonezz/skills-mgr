@@ -91,6 +91,15 @@ pub struct SkillSource {
     pub updated_at: Option<String>,
     #[serde(default)]
     pub original_agent_path: Option<String>,
+    /// Provider type that sourced this skill (e.g., "github", "hub", "feed").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    /// Hub name for hub-sourced skills (e.g., "clawhub").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hub_name: Option<String>,
+    /// Hub-specific skill identifier (e.g., slug).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hub_skill_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -99,6 +108,7 @@ pub enum SourceType {
     Git,
     Registry,
     Local,
+    Hub,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -192,6 +202,66 @@ pub struct AppSettings {
     pub git_sync: GitSyncSettings,
     #[serde(default)]
     pub scan: ScanSettings,
+    #[serde(default)]
+    pub hubs: Vec<HubConfig>,
+}
+
+/// Configuration for a skill hub — a web-based registry or featured feed
+/// that provides skill discovery and download outside of direct GitHub URLs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HubConfig {
+    /// Unique identifier (e.g., "clawhub").
+    pub name: String,
+    /// Human-readable label for UI display (e.g., "ClawHub").
+    pub display_name: String,
+    /// How this hub serves skills.
+    pub hub_type: HubType,
+    /// Base URL — for feeds this is the JSON URL, for APIs this is the base endpoint.
+    pub base_url: String,
+    /// Whether this hub is active.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Environment variable name containing an API key (optional).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key_env: Option<String>,
+    /// Page URL prefix for matching skill URLs (e.g., "https://clawhub.ai").
+    /// When a user pastes a URL starting with this prefix, the hub provider claims it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_url: Option<String>,
+    /// Download API URL template. `{slug}` is replaced with the skill slug.
+    /// Example: "https://wry-manatee-359.convex.site/api/v1/download?slug={slug}"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download_api_url: Option<String>,
+}
+
+/// How a skill hub serves its content.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum HubType {
+    /// A JSON file listing skills with `source_url` fields pointing to actual content.
+    /// Schema: `{ skills: [{ slug, name, summary, source_url, ... }] }`
+    Feed,
+    /// A REST API for browsing and downloading skills directly.
+    Api,
+}
+
+/// Built-in hub definitions that are always available.
+/// Users can override these or add custom hubs in settings.toml.
+pub fn builtin_hubs() -> Vec<HubConfig> {
+    vec![HubConfig {
+        name: "clawhub".to_string(),
+        display_name: "ClawHub".to_string(),
+        hub_type: HubType::Feed,
+        base_url:
+            "https://raw.githubusercontent.com/qufei1993/skills-hub/main/featured-skills.json"
+                .to_string(),
+        enabled: true,
+        api_key_env: None,
+        page_url: Some("https://clawhub.ai".to_string()),
+        download_api_url: Some(
+            "https://wry-manatee-359.convex.site/api/v1/download?slug={slug}".to_string(),
+        ),
+    }]
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -350,6 +420,9 @@ mod tests {
                         hash: Some("sha256:abc123".into()),
                         updated_at: Some("2026-03-10T12:00:00Z".into()),
                         original_agent_path: None,
+                        provider: Some("github".into()),
+                        hub_name: None,
+                        hub_skill_id: None,
                     },
                 );
                 m
@@ -410,6 +483,9 @@ mod tests {
                         hash: Some("sha256:abc123".into()),
                         updated_at: Some("2026-03-14T12:00:00Z".into()),
                         original_agent_path: Some("~/.claude/skills/delegated-skill".into()),
+                        provider: None,
+                        hub_name: None,
+                        hub_skill_id: None,
                     },
                 );
                 m
@@ -434,9 +510,43 @@ mod tests {
             scan: ScanSettings {
                 auto_scan_on_startup: true,
             },
+            hubs: vec![],
         };
         settings.save(&path).unwrap();
         let loaded = AppSettings::load(&path).unwrap();
         assert!(loaded.scan.auto_scan_on_startup);
+    }
+
+    #[test]
+    fn test_hub_config_roundtrip() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("settings.toml");
+
+        let settings = AppSettings {
+            hubs: vec![HubConfig {
+                name: "test-hub".into(),
+                display_name: "Test Hub".into(),
+                hub_type: HubType::Feed,
+                base_url: "https://example.com/feed.json".into(),
+                enabled: true,
+                api_key_env: None,
+                page_url: None,
+                download_api_url: None,
+            }],
+            ..Default::default()
+        };
+        settings.save(&path).unwrap();
+        let loaded = AppSettings::load(&path).unwrap();
+        assert_eq!(loaded.hubs.len(), 1);
+        assert_eq!(loaded.hubs[0].name, "test-hub");
+        assert_eq!(loaded.hubs[0].hub_type, HubType::Feed);
+    }
+
+    #[test]
+    fn test_builtin_hubs() {
+        let hubs = builtin_hubs();
+        assert!(!hubs.is_empty());
+        assert_eq!(hubs[0].name, "clawhub");
+        assert!(hubs[0].enabled);
     }
 }

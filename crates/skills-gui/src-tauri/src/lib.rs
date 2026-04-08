@@ -1,7 +1,8 @@
 mod commands;
 
 use commands::AppState;
-use skills_core::{AppDirs, Database};
+use skills_core::config::{builtin_hubs, AppSettings};
+use skills_core::{AppDirs, Database, ProviderRegistry};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 fn init_tracing(log_dir: &std::path::Path) {
@@ -41,12 +42,32 @@ pub fn run() {
 
     tracing::info!("skills-gui starting up, base_dir={}", dirs.base().display());
 
+    // Build provider registry: merge built-in hubs with user-configured hubs
+    let all_hubs = {
+        let mut hubs = builtin_hubs();
+        if let Ok(settings) = AppSettings::load(&dirs.settings_toml()) {
+            for user_hub in settings.hubs {
+                if let Some(pos) = hubs.iter().position(|h| h.name == user_hub.name) {
+                    hubs[pos] = user_hub;
+                } else {
+                    hubs.push(user_hub);
+                }
+            }
+        }
+        hubs
+    };
+    let providers = ProviderRegistry::with_hubs(&all_hubs);
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .manage(AppState { dirs, db })
+        .manage(AppState {
+            dirs,
+            db,
+            providers,
+        })
         // TODO: wire up settings.scan.auto_scan_on_startup to trigger
         // scan_skills on app launch when enabled
         .invoke_handler(tauri::generate_handler![
@@ -94,6 +115,8 @@ pub fn run() {
             commands::get_settings,
             commands::save_settings,
             commands::get_recent_logs,
+            commands::list_hubs,
+            commands::browse_hub,
         ])
         .run(tauri::generate_context!())
         .expect("Error running tauri application");
