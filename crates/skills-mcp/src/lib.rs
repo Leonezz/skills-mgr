@@ -453,12 +453,7 @@ impl SkillsMcpServer {
                 let name = if path.exists() {
                     registry.add_from_local(path)?
                 } else if let Some(provider) = self.providers.detect(source) {
-                    // GitHub uses add_from_remote for richer source metadata
-                    if provider.provider_type() == "github" {
-                        registry.add_from_remote(source).await?
-                    } else {
-                        registry.add_from_provider(source, provider).await?
-                    }
+                    registry.add_from_provider(source, provider).await?
                 } else {
                     anyhow::bail!(
                         "Source '{}' is not a local path or recognized remote URL",

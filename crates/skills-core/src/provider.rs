@@ -70,6 +70,21 @@ pub trait SkillProvider: Send + Sync {
     /// Returns `(TempDir, path_to_skill_content)`. The caller owns the TempDir lifetime.
     fn download_skill<'a>(&'a self, input: &'a str) -> DownloadFuture<'a>;
 
+    /// Build a [`StagingMeta`] for a direct import (non-browse flow).
+    ///
+    /// Each provider populates `provider_data` with whatever it needs for
+    /// `build_skill_source` to produce correct source metadata.
+    /// Default implementation includes just `hub_name`.
+    fn build_import_meta(&self, input: &str) -> Result<StagingMeta> {
+        Ok(StagingMeta {
+            provider_type: self.provider_type().to_string(),
+            source_input: input.to_string(),
+            provider_data: serde_json::json!({
+                "hub_name": self.hub_name(),
+            }),
+        })
+    }
+
     /// Build a [`SkillSource`] for tracking in sources.toml.
     ///
     /// Called after a skill has been copied into the registry, with:

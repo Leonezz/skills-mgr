@@ -458,6 +458,20 @@ impl SkillProvider for GitHubProvider {
         }
     }
 
+    fn build_import_meta(&self, input: &str) -> Result<StagingMeta> {
+        let source = parse_github_url(input)?;
+        Ok(StagingMeta {
+            provider_type: "github".to_string(),
+            source_input: input.to_string(),
+            provider_data: serde_json::json!({
+                "owner": source.owner,
+                "repo": source.repo,
+                "git_ref": source.git_ref,
+                "subpath": source.subpath,
+            }),
+        })
+    }
+
     fn download_to_staging<'a>(
         &'a self,
         input: &'a str,

@@ -116,15 +116,8 @@ pub async fn run(
                 )
                 .await?;
             } else if let Some(provider) = providers.detect(&source) {
-                let provider_type = provider.provider_type();
-                println!("Downloading via {} provider...", provider_type);
-                // GitHub uses add_from_remote for richer source metadata
-                // (canonical URL, subpath, git_ref) needed for update/sync.
-                let name = if provider_type == "github" {
-                    registry.add_from_remote(&source).await?
-                } else {
-                    registry.add_from_provider(&source, provider).await?
-                };
+                println!("Downloading via {} provider...", provider.provider_type());
+                let name = registry.add_from_provider(&source, provider).await?;
                 println!("Added skill '{}' from remote", name);
                 logging::log(
                     db,

@@ -181,14 +181,8 @@ pub async fn import_remote_skill(
     let registry = Registry::new(state.dirs.clone());
     let params_json = serde_json::json!({ "url": url });
 
-    // GitHub uses add_from_remote for richer source metadata (canonical URL,
-    // subpath, git_ref); other providers use the generic add_from_provider path.
     let result = if let Some(provider) = state.providers.detect(&url) {
-        if provider.provider_type() == "github" {
-            registry.add_from_remote(&url).await
-        } else {
-            registry.add_from_provider(&url, provider).await
-        }
+        registry.add_from_provider(&url, provider).await
     } else {
         // Fall back to GitHub for backwards compatibility
         registry.add_from_remote(&url).await

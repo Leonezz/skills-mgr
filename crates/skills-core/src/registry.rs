@@ -439,14 +439,8 @@ impl Registry {
 
         let hash = compute_tree_hash(&dest)?;
 
-        // Build a StagingMeta for the provider to construct source metadata
-        let meta = crate::provider::StagingMeta {
-            provider_type: provider.provider_type().to_string(),
-            source_input: input.to_string(),
-            provider_data: serde_json::json!({
-                "hub_name": provider.hub_name(),
-            }),
-        };
+        // Let the provider build its own staging meta with the data it needs
+        let meta = provider.build_import_meta(input)?;
         let mut skill_source = provider.build_skill_source(&meta, &skill_name, &skill_name, &hash);
         // Ensure the URL is set to the original input if the provider didn't set one
         if skill_source.url.is_none() {
