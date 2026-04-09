@@ -39,6 +39,7 @@ export function Projects() {
   const { data: projects, isLoading } = useQuery({
     queryKey: ["projects"],
     queryFn: listProjects,
+    refetchInterval: 5_000,
   })
   const { data: profilesData } = useQuery({
     queryKey: ["profiles"],

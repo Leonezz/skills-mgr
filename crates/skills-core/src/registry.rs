@@ -161,6 +161,9 @@ impl Registry {
                         .to_string(),
                 ),
                 original_agent_path: None,
+                provider: None,
+                hub_name: None,
+                hub_skill_id: None,
             },
         );
         sources.save(&self.dirs.sources_toml())?;
@@ -242,6 +245,9 @@ impl Registry {
                         .to_string(),
                 ),
                 original_agent_path: None,
+                provider: None,
+                hub_name: None,
+                hub_skill_id: None,
             },
         );
         sources.save(&self.dirs.sources_toml())?;
@@ -294,8 +300,41 @@ impl Registry {
                         .to_string(),
                 ),
                 original_agent_path: None,
+                provider: Some("github".to_string()),
+                hub_name: None,
+                hub_skill_id: None,
             },
         );
+        sources.save(&self.dirs.sources_toml())?;
+
+        Ok(())
+    }
+
+    /// Import a skill from an extracted directory using a pre-built [`SkillSource`].
+    ///
+    /// This is the provider-agnostic version of [`import_from_extracted_dir`].
+    /// The caller (typically a Tauri command) reads [`StagingMeta`], looks up the
+    /// provider, calls `build_skill_source`, and passes the result here.
+    pub fn import_with_source(
+        &self,
+        source_dir: &Path,
+        skill_name: &str,
+        skill_source: SkillSource,
+    ) -> Result<()> {
+        let skill_md = source_dir.join("SKILL.md");
+        if !skill_md.exists() {
+            bail!("No SKILL.md found at {}", source_dir.display());
+        }
+
+        let dest = self.dirs.registry().join(skill_name);
+        if dest.exists() {
+            bail!("Skill '{}' already exists in registry", skill_name);
+        }
+
+        copy_dir_recursive(source_dir, &dest)?;
+
+        let mut sources = SourcesConfig::load(&self.dirs.sources_toml()).unwrap_or_default();
+        sources.skills.insert(skill_name.to_string(), skill_source);
         sources.save(&self.dirs.sources_toml())?;
 
         Ok(())
@@ -362,8 +401,54 @@ impl Registry {
                         .to_string(),
                 ),
                 original_agent_path: None,
+                provider: Some("github".to_string()),
+                hub_name: None,
+                hub_skill_id: None,
             },
         );
+        sources.save(&self.dirs.sources_toml())?;
+
+        Ok(skill_name)
+    }
+
+    /// Add a skill from any supported remote source using a provider.
+    ///
+    /// The provider handles download; this method copies to registry and records metadata.
+    pub async fn add_from_provider(
+        &self,
+        input: &str,
+        provider: &dyn crate::provider::SkillProvider,
+    ) -> Result<String> {
+        let skill_name = provider.derive_name(input);
+        tracing::info!(
+            provider = provider.provider_type(),
+            skill_name = %skill_name,
+            input = %input,
+            "Provider import: downloading"
+        );
+
+        let dest = self.dirs.registry().join(&skill_name);
+        if dest.exists() {
+            bail!("Skill '{}' already exists in registry", skill_name);
+        }
+
+        let (_tmp_dir, skill_dir) = provider.download_skill(input).await?;
+        tracing::info!(dest = %dest.display(), "Downloaded, copying to registry");
+
+        copy_dir_recursive(&skill_dir, &dest)?;
+
+        let hash = compute_tree_hash(&dest)?;
+
+        // Let the provider build its own staging meta with the data it needs
+        let meta = provider.build_import_meta(input)?;
+        let mut skill_source = provider.build_skill_source(&meta, &skill_name, &skill_name, &hash);
+        // Ensure the URL is set to the original input if the provider didn't set one
+        if skill_source.url.is_none() {
+            skill_source.url = Some(input.to_string());
+        }
+
+        let mut sources = SourcesConfig::load(&self.dirs.sources_toml()).unwrap_or_default();
+        sources.skills.insert(skill_name.clone(), skill_source);
         sources.save(&self.dirs.sources_toml())?;
 
         Ok(skill_name)
@@ -414,6 +499,9 @@ impl Registry {
                         .map(|p| p.to_string_lossy().to_string())
                         .unwrap_or_else(|_| original_path.to_string()),
                 ),
+                provider: None,
+                hub_name: None,
+                hub_skill_id: None,
             },
         );
         sources.save(&self.dirs.sources_toml())?;
@@ -475,6 +563,9 @@ impl Registry {
         entry.url = None;
         entry.path = None;
         entry.git_ref = None;
+        entry.provider = None;
+        entry.hub_name = None;
+        entry.hub_skill_id = None;
         entry.updated_at = Some(
             chrono::Utc::now()
                 .format("%Y-%m-%dT%H:%M:%S%.3fZ")
@@ -489,8 +580,13 @@ impl Registry {
     ///
     /// Downloads a fresh tarball, compares the hash, and overwrites the
     /// registry entry if content has changed.
-    pub async fn update_from_remote(&self, name: &str) -> Result<SkillUpdateResult> {
-        let sources = SourcesConfig::load(&self.dirs.sources_toml()).unwrap_or_default();
+    pub async fn update_from_remote(
+        &self,
+        name: &str,
+        providers: Option<&crate::ProviderRegistry>,
+    ) -> Result<SkillUpdateResult> {
+        let sources = SourcesConfig::load(&self.dirs.sources_toml())
+            .context("Failed to load sources.toml — file may be corrupted")?;
         let source = match sources.skills.get(name) {
             Some(s) => s,
             None => {
@@ -501,13 +597,21 @@ impl Registry {
             }
         };
 
-        if source.source_type != SourceType::Git {
-            return Ok(SkillUpdateResult::Skipped {
+        match source.source_type {
+            SourceType::Git => self.update_git_skill(name, source).await,
+            SourceType::Hub => self.update_hub_skill(name, source, providers).await,
+            _ => Ok(SkillUpdateResult::Skipped {
                 name: name.to_string(),
-                reason: format!("{:?} source (not Git)", source.source_type),
-            });
+                reason: format!("{:?} source (not syncable)", source.source_type),
+            }),
         }
+    }
 
+    async fn update_git_skill(
+        &self,
+        name: &str,
+        source: &SkillSource,
+    ) -> Result<SkillUpdateResult> {
         let url = match &source.url {
             Some(u) => u.clone(),
             None => {
@@ -520,9 +624,66 @@ impl Registry {
 
         let github_source = remote::parse_github_url(&url)?;
         let (_tmp_dir, skill_dir) = remote::download_github_skill(&github_source).await?;
-        let new_hash = compute_tree_hash(&skill_dir)?;
+        self.apply_update(name, &skill_dir).await
+    }
 
-        let old_hash = source.hash.clone().unwrap_or_default();
+    async fn update_hub_skill(
+        &self,
+        name: &str,
+        source: &SkillSource,
+        providers: Option<&crate::ProviderRegistry>,
+    ) -> Result<SkillUpdateResult> {
+        let providers = match providers {
+            Some(p) => p,
+            None => {
+                return Ok(SkillUpdateResult::Skipped {
+                    name: name.to_string(),
+                    reason: "no provider registry available for hub sync".to_string(),
+                });
+            }
+        };
+
+        let provider_type = source.provider.as_deref().unwrap_or("feed");
+        let provider = match providers.by_type(provider_type) {
+            Some(p) => p,
+            None => {
+                return Ok(SkillUpdateResult::Skipped {
+                    name: name.to_string(),
+                    reason: format!("provider '{}' not found", provider_type),
+                });
+            }
+        };
+
+        let result = provider.download_for_update(source).await?;
+        match result {
+            Some((_tmp_dir, skill_dir)) => self.apply_update(name, &skill_dir).await,
+            None => Ok(SkillUpdateResult::Skipped {
+                name: name.to_string(),
+                reason: format!(
+                    "provider '{}' declined update — source metadata may be incomplete \
+                     (hub_name={}, hub_skill_id={})",
+                    provider_type,
+                    source.hub_name.as_deref().unwrap_or("<none>"),
+                    source.hub_skill_id.as_deref().unwrap_or("<none>"),
+                ),
+            }),
+        }
+    }
+
+    /// Shared logic: compare hashes, replace if changed, update sources.toml.
+    ///
+    /// Loads sources.toml once to read the old hash and (if changed) update it.
+    async fn apply_update(&self, name: &str, skill_dir: &Path) -> Result<SkillUpdateResult> {
+        let new_hash = compute_tree_hash(skill_dir)?;
+
+        let mut sources = SourcesConfig::load(&self.dirs.sources_toml())
+            .context("Failed to load sources.toml — file may be corrupted")?;
+        let old_hash = sources
+            .skills
+            .get(name)
+            .and_then(|s| s.hash.clone())
+            .unwrap_or_default();
+
         if new_hash == old_hash {
             return Ok(SkillUpdateResult::AlreadyUpToDate {
                 name: name.to_string(),
@@ -534,10 +695,9 @@ impl Registry {
         if dest.exists() {
             std::fs::remove_dir_all(&dest)?;
         }
-        copy_dir_recursive(&skill_dir, &dest)?;
+        copy_dir_recursive(skill_dir, &dest)?;
 
-        // Update sources.toml
-        let mut sources = SourcesConfig::load(&self.dirs.sources_toml()).unwrap_or_default();
+        // Update hash in the already-loaded sources config
         if let Some(entry) = sources.skills.get_mut(name) {
             entry.hash = Some(new_hash.clone());
             entry.updated_at = Some(
@@ -555,19 +715,23 @@ impl Registry {
         })
     }
 
-    /// Update all Git-sourced skills from their tracked remotes.
-    pub async fn sync_all(&self) -> Result<Vec<SkillUpdateResult>> {
-        let sources = SourcesConfig::load(&self.dirs.sources_toml()).unwrap_or_default();
-        let git_skills: Vec<String> = sources
+    /// Update all remote-sourced skills (Git and Hub) from their tracked remotes.
+    pub async fn sync_all(
+        &self,
+        providers: Option<&crate::ProviderRegistry>,
+    ) -> Result<Vec<SkillUpdateResult>> {
+        let sources = SourcesConfig::load(&self.dirs.sources_toml())
+            .context("Failed to load sources.toml — file may be corrupted")?;
+        let syncable_skills: Vec<String> = sources
             .skills
             .iter()
-            .filter(|(_, s)| s.source_type == SourceType::Git)
+            .filter(|(_, s)| s.source_type == SourceType::Git || s.source_type == SourceType::Hub)
             .map(|(name, _)| name.clone())
             .collect();
 
         let mut results = Vec::new();
-        for name in &git_skills {
-            match self.update_from_remote(name).await {
+        for name in &syncable_skills {
+            match self.update_from_remote(name, providers).await {
                 Ok(r) => results.push(r),
                 Err(e) => results.push(SkillUpdateResult::Failed {
                     name: name.clone(),

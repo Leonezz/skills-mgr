@@ -302,7 +302,8 @@ pub async fn activate(
             .await?;
     }
 
-    // Record active profile
+    // Record active profile and ensure it's linked
+    db.link_profile_to_project(project_id, profile_name).await?;
     db.activate_project_profile(project_id, profile_name)
         .await?;
 
@@ -360,6 +361,40 @@ pub async fn deactivate(
         files_removed,
         files_kept,
     })
+}
+
+/// Refresh a profile's placements for all projects where it is active.
+///
+/// After a profile is edited (skills added/removed), call this to reconcile
+/// the on-disk placements with the new profile definition.
+/// Returns the number of projects refreshed.
+pub async fn refresh_profile(
+    dirs: &AppDirs,
+    db: &Database,
+    profiles_config: &ProfilesConfig,
+    agents_config: &AgentsConfig,
+    profile_name: &str,
+) -> Result<usize> {
+    let projects = db.get_projects_for_profile(profile_name).await?;
+    let mut refreshed = 0;
+
+    for (project_path, _project_name) in &projects {
+        // Deactivate then re-activate to reconcile placements
+        deactivate(db, profile_name, project_path).await?;
+        activate(
+            dirs,
+            db,
+            profiles_config,
+            agents_config,
+            profile_name,
+            project_path,
+            true, // force: overwrite any conflicts
+        )
+        .await?;
+        refreshed += 1;
+    }
+
+    Ok(refreshed)
 }
 
 /// Result of an atomic profile switch.
@@ -434,10 +469,19 @@ pub async fn switch_profile(
     }
 
     let mut old_skills: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut unresolvable_profiles: Vec<String> = Vec::new();
     for p in &old_profiles {
-        if let Ok(skills) = profiles::resolve_profile(profiles_config, p, true) {
-            old_skills.extend(skills);
+        match profiles::resolve_profile(profiles_config, p, true) {
+            Ok(skills) => old_skills.extend(skills),
+            Err(_) => unresolvable_profiles.push(p.clone()),
         }
+    }
+    if !unresolvable_profiles.is_empty() {
+        tracing::warn!(
+            profiles = ?unresolvable_profiles,
+            "Old profile(s) no longer in config — their skills cannot be resolved for cleanup. \
+             Orphaned skill placements may remain on disk."
+        );
     }
 
     let new_skills_set: std::collections::BTreeSet<String> = new_skills.iter().cloned().collect();
@@ -551,10 +595,11 @@ pub async fn switch_profile(
         }
     }
 
-    // 6. Update profile activation state
+    // 6. Update profile activation state and ensure new profile is linked
     for old_p in &old_profiles {
         db.deactivate_project_profile(project_id, old_p).await?;
     }
+    db.link_profile_to_project(project_id, new_profile).await?;
     db.activate_project_profile(project_id, new_profile).await?;
 
     let total_placements = (to_add.len() + to_keep.len()) * agents.len();
@@ -594,10 +639,19 @@ pub async fn dry_run_switch(
     };
 
     let mut old_skills: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut unresolvable_profiles: Vec<String> = Vec::new();
     for p in &old_profiles {
-        if let Ok(skills) = profiles::resolve_profile(profiles_config, p, true) {
-            old_skills.extend(skills);
+        match profiles::resolve_profile(profiles_config, p, true) {
+            Ok(skills) => old_skills.extend(skills),
+            Err(_) => unresolvable_profiles.push(p.clone()),
         }
+    }
+    if !unresolvable_profiles.is_empty() {
+        tracing::warn!(
+            profiles = ?unresolvable_profiles,
+            "Old profile(s) no longer in config — their skills cannot be resolved for cleanup. \
+             Orphaned skill placements may remain on disk."
+        );
     }
 
     let new_skills_set: std::collections::BTreeSet<String> = new_skills.iter().cloned().collect();

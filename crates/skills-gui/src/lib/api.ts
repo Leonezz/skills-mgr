@@ -105,6 +105,26 @@ export async function syncAllSkills() {
   return await invoke("sync_all_skills") as string
 }
 
+// --- Hubs ---
+
+export interface HubInfo {
+  name: string
+  display_name: string
+  hub_type: string
+  base_url: string
+  enabled: boolean
+  page_url: string | null
+}
+
+export async function listHubs() {
+  return await invoke("list_hubs") as HubInfo[]
+}
+
+export async function browseHub(hubName: string) {
+  const data = await invoke("browse_hub", { hubName })
+  return data as RemoteSkillEntry[]
+}
+
 // --- Profiles ---
 
 export async function listProfiles() {

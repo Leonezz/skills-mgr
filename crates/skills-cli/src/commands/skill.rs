@@ -2,9 +2,14 @@ use crate::SkillAction;
 use anyhow::Result;
 use skills_core::logging::{self, LogEntry, Source};
 use skills_core::registry::SkillUpdateResult;
-use skills_core::{AppDirs, Database, Registry};
+use skills_core::{AppDirs, Database, ProviderRegistry, Registry};
 
-pub async fn run(dirs: &AppDirs, db: &Database, action: SkillAction) -> Result<()> {
+pub async fn run(
+    dirs: &AppDirs,
+    db: &Database,
+    providers: &ProviderRegistry,
+    action: SkillAction,
+) -> Result<()> {
     let registry = Registry::new(dirs.clone());
 
     match action {
@@ -110,9 +115,9 @@ pub async fn run(dirs: &AppDirs, db: &Database, action: SkillAction) -> Result<(
                     },
                 )
                 .await?;
-            } else if skills_core::remote::is_remote_source(&source) {
-                println!("Downloading from {}...", source);
-                let name = registry.add_from_remote(&source).await?;
+            } else if let Some(provider) = providers.detect(&source) {
+                println!("Downloading via {} provider...", provider.provider_type());
+                let name = registry.add_from_provider(&source, provider).await?;
                 println!("Added skill '{}' from remote", name);
                 logging::log(
                     db,
@@ -133,9 +138,10 @@ pub async fn run(dirs: &AppDirs, db: &Database, action: SkillAction) -> Result<(
                     source
                 );
                 println!("Supported formats:");
-                println!("  Local:  /path/to/skill-dir");
-                println!("  GitHub: https://github.com/owner/repo/tree/main/path");
-                println!("  Short:  owner/repo/path/to/skill");
+                println!("  Local:   /path/to/skill-dir");
+                println!("  GitHub:  https://github.com/owner/repo/tree/main/path");
+                println!("  Short:   owner/repo/path/to/skill");
+                println!("  Hub URL: https://clawhub.ai/owner/skill-name");
             }
         }
         SkillAction::Update { name, all } => {
@@ -150,7 +156,10 @@ pub async fn run(dirs: &AppDirs, db: &Database, action: SkillAction) -> Result<(
 
             let mut updated = 0;
             for skill_name in &skills_to_update {
-                match registry.update_from_remote(skill_name).await {
+                match registry
+                    .update_from_remote(skill_name, Some(providers))
+                    .await
+                {
                     Ok(SkillUpdateResult::Updated { name, new_hash, .. }) => {
                         let replaced =
                             skills_core::placements::replace_skill(dirs, db, &name).await?;
@@ -194,8 +203,8 @@ pub async fn run(dirs: &AppDirs, db: &Database, action: SkillAction) -> Result<(
             }
         }
         SkillAction::Sync => {
-            println!("Syncing all git-sourced skills...");
-            let results = registry.sync_all().await?;
+            println!("Syncing all remote-sourced skills...");
+            let results = registry.sync_all(Some(providers)).await?;
             let mut updated = 0;
             for result in &results {
                 match result {
@@ -257,6 +266,57 @@ pub async fn run(dirs: &AppDirs, db: &Database, action: SkillAction) -> Result<(
         }
         SkillAction::UnlinkRemote { name } => {
             super::discover::run_unlink_remote(dirs, &name)?;
+        }
+        SkillAction::Browse { source, hub } => {
+            let input = if let Some(hub_name) = hub {
+                format!("hub:{}", hub_name)
+            } else if let Some(src) = source {
+                src
+            } else {
+                println!("Specify a source URL or --hub <name>");
+                println!("Examples:");
+                println!("  skill browse owner/repo");
+                println!("  skill browse --hub clawhub");
+                return Ok(());
+            };
+
+            let provider = providers
+                .detect(&input)
+                .ok_or_else(|| anyhow::anyhow!("No provider found for '{}'", input))?;
+
+            println!("Browsing via {} provider...", provider.provider_type());
+
+            let staging_dir = dirs.cache().join("staging");
+            let skills = provider.download_to_staging(&input, &staging_dir).await?;
+
+            if skills.is_empty() {
+                println!("No skills found.");
+            } else {
+                println!("\nFound {} skill(s):\n", skills.len());
+                for s in &skills {
+                    let desc = s.description.as_deref().unwrap_or("(no description)");
+                    println!("  {} — {}", s.name, desc);
+                    println!("    subpath: {}", s.subpath);
+                }
+                println!("\nUse `skills-mgr skill add <source>` to install a skill.");
+            }
+        }
+        SkillAction::Hubs => {
+            let hubs = skills_core::config::merge_hubs(&dirs.settings_toml());
+
+            if hubs.is_empty() {
+                println!("No hubs configured.");
+            } else {
+                println!("Configured hubs:\n");
+                for hub in &hubs {
+                    let status = if hub.enabled { "enabled" } else { "disabled" };
+                    println!(
+                        "  {} ({}) [{}] — {}",
+                        hub.display_name, hub.name, status, hub.base_url
+                    );
+                }
+                println!("\nUse `skills-mgr skill browse --hub <name>` to browse a hub.");
+            }
         }
     }
 

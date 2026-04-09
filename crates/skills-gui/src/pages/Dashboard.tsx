@@ -35,11 +35,11 @@ function ActivityRow({ log }: { log: LogEntry }) {
 }
 
 export function Dashboard() {
-  const skills = useQuery({ queryKey: ["skills"], queryFn: listSkills })
-  const profiles = useQuery({ queryKey: ["profiles"], queryFn: listProfiles })
-  const projects = useQuery({ queryKey: ["projects"], queryFn: listProjects })
+  const skills = useQuery({ queryKey: ["skills"], queryFn: listSkills, refetchInterval: 10_000 })
+  const profiles = useQuery({ queryKey: ["profiles"], queryFn: listProfiles, refetchInterval: 10_000 })
+  const projects = useQuery({ queryKey: ["projects"], queryFn: listProjects, refetchInterval: 10_000 })
   const agents = useQuery({ queryKey: ["agents"], queryFn: listAgents })
-  const logs = useQuery({ queryKey: ["logs"], queryFn: () => getRecentLogs(5) })
+  const logs = useQuery({ queryKey: ["logs"], queryFn: () => getRecentLogs(5), refetchInterval: 10_000 })
 
   const profileCount = profiles.data?.profiles?.length ?? 0
   const projectCount = projects.data?.length ?? 0

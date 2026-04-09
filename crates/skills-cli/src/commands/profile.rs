@@ -36,9 +36,14 @@ pub async fn run(dirs: &AppDirs, db: &Database, action: ProfileAction) -> Result
                 println!("  {}", skill);
             }
         }
-        ProfileAction::Create { name, add, include } => {
+        ProfileAction::Create {
+            name,
+            description,
+            add,
+            include,
+        } => {
             let profile = ProfileDef {
-                description: None,
+                description,
                 skills: add,
                 includes: include,
             };
@@ -104,7 +109,16 @@ pub async fn run(dirs: &AppDirs, db: &Database, action: ProfileAction) -> Result
             }
             profiles::validate_no_cycles(&profiles_config)?;
             profiles_config.save(&dirs.profiles_toml())?;
+
+            // Refresh placements for all projects where this profile is active
+            let refreshed =
+                placements::refresh_profile(dirs, db, &profiles_config, &agents_config, &name)
+                    .await?;
+
             println!("Updated profile '{}'", name);
+            if refreshed > 0 {
+                println!("  Refreshed placements in {} project(s)", refreshed);
+            }
             logging::log(
                 db,
                 LogEntry {
@@ -114,7 +128,10 @@ pub async fn run(dirs: &AppDirs, db: &Database, action: ProfileAction) -> Result
                     params: None,
                     project_path: None,
                     result: "success",
-                    details: &format!("Updated profile '{}'", name),
+                    details: &format!(
+                        "Updated profile '{}', {} projects refreshed",
+                        name, refreshed
+                    ),
                 },
             )
             .await?;

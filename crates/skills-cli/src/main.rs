@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 use skills_core::config::ProfilesConfig;
 use skills_core::profiles;
 use skills_core::registry::compute_tree_hash;
-use skills_core::{AppDirs, Database, Registry};
+use skills_core::{AppDirs, Database, ProviderRegistry, Registry};
 
 #[derive(Parser)]
 #[command(name = "skills-mgr", about = "Cross-agent skill management tool")]
@@ -117,6 +117,16 @@ pub enum SkillAction {
     UnlinkRemote {
         name: String,
     },
+    /// Browse available skills from a remote source or hub
+    Browse {
+        /// Remote source (GitHub URL/shorthand) or omit to use --hub
+        source: Option<String>,
+        /// Browse a configured hub by name (e.g., clawhub)
+        #[arg(long)]
+        hub: Option<String>,
+    },
+    /// List configured skill hubs
+    Hubs,
 }
 
 #[derive(Subcommand)]
@@ -124,6 +134,8 @@ pub enum ProfileAction {
     List,
     Create {
         name: String,
+        #[arg(long, short)]
+        description: Option<String>,
         #[arg(long, value_delimiter = ',')]
         add: Vec<String>,
         #[arg(long, value_delimiter = ',')]
@@ -241,8 +253,12 @@ async fn main() -> Result<()> {
 
     let db = Database::open(&dirs.database()).await?;
 
+    // Build provider registry with built-in + user-configured hubs
+    let all_hubs = skills_core::config::merge_hubs(&dirs.settings_toml());
+    let providers = ProviderRegistry::with_hubs(&all_hubs);
+
     match cli.command {
-        Commands::Skill { action } => commands::skill::run(&dirs, &db, action).await?,
+        Commands::Skill { action } => commands::skill::run(&dirs, &db, &providers, action).await?,
         Commands::Profile { action } => commands::profile::run(&dirs, &db, action).await?,
         Commands::Agent { action } => commands::agent::run(&dirs, &db, action).await?,
         Commands::Global { action } => commands::global::run(&dirs, &db, action).await?,
