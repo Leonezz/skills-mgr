@@ -771,12 +771,52 @@ pub async fn create_profile(
 }
 
 #[tauri::command]
+pub async fn duplicate_profile(
+    state: State<'_, AppState>,
+    source_name: String,
+    new_name: String,
+) -> Result<String, String> {
+    let mut config =
+        ProfilesConfig::load(&state.dirs.profiles_toml()).map_err(|e| e.to_string())?;
+    if config.profiles.contains_key(&new_name) {
+        return Err(format!("Profile '{}' already exists", new_name));
+    }
+    let source = config
+        .profiles
+        .get(&source_name)
+        .ok_or_else(|| format!("Profile '{}' not found", source_name))?
+        .clone();
+    // Start fresh: skills/includes/description are copied, active project
+    // state is not — placements are a project-side concept anyway.
+    config.profiles.insert(new_name.clone(), source);
+    profiles::validate_no_cycles(&config).map_err(|e| e.to_string())?;
+    config
+        .save(&state.dirs.profiles_toml())
+        .map_err(|e| e.to_string())?;
+    let _ = logging::log(
+        &state.db,
+        LogEntry {
+            source: Source::Gui,
+            agent_name: None,
+            operation: "profile_duplicate",
+            params: None,
+            project_path: None,
+            result: "success",
+            details: &format!("Duplicated profile '{}' as '{}'", source_name, new_name),
+        },
+    )
+    .await;
+    Ok(format!("Duplicated '{}' as '{}'", source_name, new_name))
+}
+
+#[tauri::command]
 pub async fn edit_profile(
     state: State<'_, AppState>,
     name: String,
     add_skills: Vec<String>,
     remove_skills: Vec<String>,
     add_includes: Vec<String>,
+    remove_includes: Vec<String>,
     description: Option<String>,
 ) -> Result<String, String> {
     let mut config =
@@ -799,6 +839,7 @@ pub async fn edit_profile(
             profile.includes.push(i.clone());
         }
     }
+    profile.includes.retain(|i| !remove_includes.contains(i));
     profiles::validate_no_cycles(&config).map_err(|e| e.to_string())?;
     config
         .save(&state.dirs.profiles_toml())
@@ -1626,6 +1667,182 @@ pub async fn deactivate_project(
         return Err(format!("Some profiles failed: {}", errors.join("; ")));
     }
     Ok(format!("Deactivated {} profiles", deactivated.len()))
+}
+
+// --- Project Detail ---
+
+#[derive(Serialize)]
+pub struct ProjectDetailInfo {
+    pub path: String,
+    pub name: String,
+    pub linked_profiles: Vec<LinkedProfileSummary>,
+    pub placements_by_agent: Vec<AgentPlacements>,
+    pub recent_activity: Vec<ProjectLogEntry>,
+}
+
+#[derive(Serialize)]
+pub struct LinkedProfileSummary {
+    pub name: String,
+    pub is_active: bool,
+    pub skill_count: usize,
+}
+
+#[derive(Serialize)]
+pub struct AgentPlacements {
+    pub agent_name: String,
+    pub placements: Vec<PlacementSummary>,
+}
+
+#[derive(Serialize)]
+pub struct PlacementSummary {
+    pub skill_name: String,
+    pub target_path: String,
+    pub placed_at: String,
+}
+
+#[derive(Serialize)]
+pub struct ProjectLogEntry {
+    pub id: i64,
+    pub timestamp: String,
+    pub source: String,
+    pub agent_name: Option<String>,
+    pub operation: String,
+    pub result: String,
+    pub details: Option<String>,
+}
+
+#[tauri::command]
+pub async fn get_project_detail(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<ProjectDetailInfo, String> {
+    let projects = state
+        .db
+        .list_all_projects()
+        .await
+        .map_err(|e| e.to_string())?;
+    let project = projects
+        .into_iter()
+        .find(|p| p.path == path)
+        .ok_or_else(|| format!("Project '{}' not found", path))?;
+
+    let display_name = project.name.unwrap_or_else(|| {
+        std::path::Path::new(&project.path)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| project.path.clone())
+    });
+
+    let linked_profile_names = state
+        .db
+        .get_linked_profiles(project.id)
+        .await
+        .unwrap_or_default();
+    let active_profile_names = state
+        .db
+        .get_active_profiles(project.id)
+        .await
+        .unwrap_or_default();
+    let active_set: std::collections::HashSet<&str> =
+        active_profile_names.iter().map(|s| s.as_str()).collect();
+
+    // Resolve skill counts per profile
+    let profiles_config =
+        ProfilesConfig::load(&state.dirs.profiles_toml()).map_err(|e| e.to_string())?;
+    let linked_profiles: Vec<LinkedProfileSummary> = linked_profile_names
+        .iter()
+        .map(|name| {
+            let skill_count = profiles::resolve_profile(&profiles_config, name, false)
+                .map(|s| s.len())
+                .unwrap_or(0);
+            LinkedProfileSummary {
+                name: name.clone(),
+                is_active: active_set.contains(name.as_str()),
+                skill_count,
+            }
+        })
+        .collect();
+
+    // Placements grouped by agent
+    let all_placements = state
+        .db
+        .get_all_placements_for_project(project.id)
+        .await
+        .unwrap_or_default();
+    let mut agent_map: std::collections::BTreeMap<String, Vec<PlacementSummary>> =
+        std::collections::BTreeMap::new();
+    for p in all_placements {
+        agent_map
+            .entry(p.agent_name.clone())
+            .or_default()
+            .push(PlacementSummary {
+                skill_name: p.skill_name,
+                target_path: p.target_path,
+                placed_at: p.placed_at,
+            });
+    }
+    let placements_by_agent: Vec<AgentPlacements> = agent_map
+        .into_iter()
+        .map(|(agent_name, placements)| AgentPlacements {
+            agent_name,
+            placements,
+        })
+        .collect();
+
+    // Recent activity
+    let logs = state
+        .db
+        .get_logs_for_project(&path, 10)
+        .await
+        .unwrap_or_default();
+    let recent_activity: Vec<ProjectLogEntry> = logs
+        .into_iter()
+        .map(|l| ProjectLogEntry {
+            id: l.id,
+            timestamp: l.timestamp,
+            source: l.source,
+            agent_name: l.agent_name,
+            operation: l.operation,
+            result: l.result,
+            details: l.details,
+        })
+        .collect();
+
+    Ok(ProjectDetailInfo {
+        path: project.path,
+        name: display_name,
+        linked_profiles,
+        placements_by_agent,
+        recent_activity,
+    })
+}
+
+#[tauri::command]
+pub async fn reveal_path(path: String) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+    if !p.exists() {
+        return Err(format!("Path not found: {}", path));
+    }
+
+    #[cfg(target_os = "macos")]
+    std::process::Command::new("open")
+        .arg(p)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+
+    #[cfg(target_os = "linux")]
+    std::process::Command::new("xdg-open")
+        .arg(p)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+
+    #[cfg(target_os = "windows")]
+    std::process::Command::new("explorer")
+        .arg(p)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
 }
 
 // --- Settings ---

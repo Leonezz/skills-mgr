@@ -41,6 +41,41 @@ export const ProjectSchema = z.object({
   placement_count: z.number(),
 })
 
+export const LinkedProfileSummarySchema = z.object({
+  name: z.string(),
+  is_active: z.boolean(),
+  skill_count: z.number(),
+})
+
+export const PlacementSummarySchema = z.object({
+  skill_name: z.string(),
+  target_path: z.string(),
+  placed_at: z.string(),
+})
+
+export const AgentPlacementsSchema = z.object({
+  agent_name: z.string(),
+  placements: z.array(PlacementSummarySchema),
+})
+
+export const ProjectLogEntrySchema = z.object({
+  id: z.number(),
+  timestamp: z.string(),
+  source: z.string(),
+  agent_name: z.string().nullable(),
+  operation: z.string(),
+  result: z.string(),
+  details: z.string().nullable(),
+})
+
+export const ProjectDetailSchema = z.object({
+  path: z.string(),
+  name: z.string(),
+  linked_profiles: z.array(LinkedProfileSummarySchema),
+  placements_by_agent: z.array(AgentPlacementsSchema),
+  recent_activity: z.array(ProjectLogEntrySchema),
+})
+
 export const AgentSchema = z.object({
   name: z.string(),
   project_path: z.string(),
@@ -77,6 +112,11 @@ export const DiscoveredSkillSchema = z.object({
   exists_in_registry: z.boolean(),
 })
 
+export type LinkedProfileSummary = z.infer<typeof LinkedProfileSummarySchema>
+export type PlacementSummary = z.infer<typeof PlacementSummarySchema>
+export type AgentPlacements = z.infer<typeof AgentPlacementsSchema>
+export type ProjectLogEntry = z.infer<typeof ProjectLogEntrySchema>
+export type ProjectDetail = z.infer<typeof ProjectDetailSchema>
 export type GlobalSkills = z.infer<typeof GlobalSkillsSchema>
 export type DiscoveredSkill = z.infer<typeof DiscoveredSkillSchema>
 export type Skill = z.infer<typeof SkillSchema>

@@ -225,6 +225,20 @@ impl Database {
         Ok(rows.into_iter().map(LogEntry::from).collect())
     }
 
+    pub async fn get_logs_for_project(
+        &self,
+        project_path: &str,
+        limit: i64,
+    ) -> Result<Vec<LogEntry>> {
+        let rows = operation_log::Entity::find()
+            .filter(operation_log::Column::ProjectPath.eq(project_path))
+            .order_by_desc(operation_log::Column::Id)
+            .limit(limit as u64)
+            .all(&self.conn)
+            .await?;
+        Ok(rows.into_iter().map(LogEntry::from).collect())
+    }
+
     // --- Placements ---
 
     pub async fn insert_placement(

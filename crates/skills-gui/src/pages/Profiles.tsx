@@ -1,4 +1,5 @@
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect } from "react"
+import { useSearchParams } from "react-router"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -15,7 +16,6 @@ import { TagInput } from "@/components/ui/tag-input"
 import {
   listProfiles,
   createProfile,
-  editProfile,
   deleteProfile,
   listSkills,
   activateGlobal,
@@ -26,29 +26,40 @@ import { toast } from "sonner"
 import { Plus, MoreVertical, Layers, Globe } from "lucide-react"
 import type { Profile } from "@/lib/schemas"
 import { formatTokens } from "@/lib/format"
+import { ProfileDetailSheet } from "./profiles/ProfileDetailSheet"
 
 export function Profiles() {
   const queryClient = useQueryClient()
   const { data, isLoading } = useQuery({ queryKey: ["profiles"], queryFn: listProfiles })
   const { data: skills } = useQuery({ queryKey: ["skills"], queryFn: listSkills })
 
+  const profiles = data?.profiles ?? []
+
   const [showCreate, setShowCreate] = useState(false)
-  const [showEdit, setShowEdit] = useState<Profile | null>(null)
   const [showDelete, setShowDelete] = useState<string | null>(null)
+  const [detailName, setDetailName] = useState<string | null>(null)
+  const [detailMode, setDetailMode] = useState<"view" | "edit">("view")
+
+  // Deep link: /profiles?detail=<name> auto-opens that profile's detail sheet.
+  const [searchParams, setSearchParams] = useSearchParams()
+  useEffect(() => {
+    const target = searchParams.get("detail")
+    if (!target || !profiles.length) return
+    const match = profiles.find((p) => p.name === target)
+    if (match) {
+      setDetailMode("view")
+      setDetailName(match.name)
+    }
+    const next = new URLSearchParams(searchParams)
+    next.delete("detail")
+    setSearchParams(next, { replace: true })
+  }, [searchParams, profiles, setSearchParams])
 
   // Create form state
   const [newName, setNewName] = useState("")
   const [newDesc, setNewDesc] = useState("")
   const [newSkills, setNewSkills] = useState<string[]>([])
   const [newIncludes, setNewIncludes] = useState<string[]>([])
-
-  // Edit form state
-  const [editDesc, setEditDesc] = useState("")
-  const [editAddSkills, setEditAddSkills] = useState<string[]>([])
-  const [editRemoveSkills, setEditRemoveSkills] = useState<string[]>([])
-  const [editAddIncludes, setEditAddIncludes] = useState<string[]>([])
-
-  const profiles = data?.profiles ?? []
   const skillSuggestions = skills?.map((s) => s.name) ?? []
   const profileSuggestions = profiles.map((p) => p.name)
 
@@ -114,23 +125,6 @@ export function Profiles() {
     onError: (err) => toast.error(String(err)),
   })
 
-  const editMutation = useMutation({
-    mutationFn: () =>
-      editProfile(
-        showEdit!.name,
-        editAddSkills,
-        editRemoveSkills,
-        editAddIncludes,
-        editDesc || undefined,
-      ),
-    onSuccess: (msg) => {
-      toast.success(msg)
-      queryClient.invalidateQueries({ queryKey: ["profiles"] })
-      closeEdit()
-    },
-    onError: (err) => toast.error(String(err)),
-  })
-
   const deleteMutation = useMutation({
     mutationFn: (name: string) => deleteProfile(name),
     onSuccess: (msg) => {
@@ -187,41 +181,9 @@ export function Profiles() {
     setNewIncludes([])
   }
 
-  function openEdit(profile: Profile) {
-    setEditAddSkills([])
-    setEditRemoveSkills([])
-    setEditAddIncludes([])
-    setEditDesc(profile.description ?? "")
-    setShowEdit(profile)
-  }
-
-  function closeEdit() {
-    setShowEdit(null)
-    setEditAddSkills([])
-    setEditRemoveSkills([])
-    setEditAddIncludes([])
-    setEditDesc("")
-  }
-
-  function getEditCurrentSkills(): string[] {
-    if (!showEdit) return []
-    const remaining = showEdit.skills.filter((s) => !editRemoveSkills.includes(s))
-    return [...remaining, ...editAddSkills]
-  }
-
-  function handleEditSkillsChange(tags: string[]) {
-    if (!showEdit) return
-    const originalSkills = showEdit.skills
-    const removals: string[] = []
-    const additions: string[] = []
-    for (const skill of originalSkills) {
-      if (!tags.includes(skill)) removals.push(skill)
-    }
-    for (const tag of tags) {
-      if (!originalSkills.includes(tag)) additions.push(tag)
-    }
-    setEditRemoveSkills(removals)
-    setEditAddSkills(additions)
+  function openDetail(profile: Profile, mode: "view" | "edit" = "view") {
+    setDetailMode(mode)
+    setDetailName(profile.name)
   }
 
   return (
@@ -239,6 +201,23 @@ export function Profiles() {
           Create Profile
         </Button>
       </div>
+
+      {/* Profile Detail Sheet */}
+      <ProfileDetailSheet
+        profile={detailName ? profiles.find((p) => p.name === detailName) ?? null : null}
+        allProfiles={profiles}
+        skills={skills}
+        initialMode={detailMode}
+        onClose={() => setDetailName(null)}
+        onDelete={(profile) => {
+          setDetailName(null)
+          setShowDelete(profile.name)
+        }}
+        onDuplicated={(newName) => {
+          setDetailMode("view")
+          setDetailName(newName)
+        }}
+      />
 
       {/* Create Dialog */}
       <Dialog open={showCreate} onOpenChange={(o) => { if (!o) closeCreate() }}>
@@ -293,76 +272,6 @@ export function Profiles() {
             >
               {createMutation.isPending ? "Creating..." : "Create Profile"}
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Edit Dialog */}
-      <Dialog open={showEdit !== null} onOpenChange={(o) => { if (!o) closeEdit() }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Edit Profile</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label>Profile Name</Label>
-              <Input value={showEdit?.name ?? ""} disabled />
-            </div>
-            <div className="space-y-2">
-              <Label>Description</Label>
-              <Input
-                value={editDesc}
-                onChange={(e) => setEditDesc(e.target.value)}
-                placeholder="Profile description..."
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>Compose from Profiles</Label>
-              <TagInput
-                value={[...(showEdit?.includes ?? []), ...editAddIncludes]}
-                onChange={(tags) => {
-                  const existing = showEdit?.includes ?? []
-                  setEditAddIncludes(tags.filter((t) => !existing.includes(t)))
-                }}
-                suggestions={profileSuggestions.filter(
-                  (p) => p !== showEdit?.name && !showEdit?.includes.includes(p),
-                )}
-                placeholder="+ Add profile"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>Direct Skills ({getEditCurrentSkills().length})</Label>
-              <TagInput
-                value={getEditCurrentSkills()}
-                onChange={handleEditSkillsChange}
-                suggestions={skillSuggestions}
-                placeholder="+ Add skill"
-              />
-            </div>
-          </div>
-          <DialogFooter className="justify-between">
-            <button
-              onClick={() => {
-                if (showEdit) {
-                  setShowDelete(showEdit.name)
-                  closeEdit()
-                }
-              }}
-              className="text-sm text-destructive hover:underline"
-            >
-              Delete Profile
-            </button>
-            <div className="flex gap-2">
-              <Button variant="outline" onClick={closeEdit}>
-                Cancel
-              </Button>
-              <Button
-                onClick={() => editMutation.mutate()}
-                disabled={editMutation.isPending}
-              >
-                {editMutation.isPending ? "Saving..." : "Save Changes"}
-              </Button>
-            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -514,7 +423,16 @@ export function Profiles() {
             return (
               <div
                 key={profile.name}
-                className="animate-list-item group rounded-xl border border-border bg-card p-5 transition-colors hover:border-primary/30"
+                role="button"
+                tabIndex={0}
+                onClick={() => openDetail(profile, "view")}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault()
+                    openDetail(profile, "view")
+                  }
+                }}
+                className="animate-list-item group cursor-pointer rounded-xl border border-border bg-card p-5 transition-colors hover:border-primary/30 focus:border-primary/50 focus:outline-none"
               >
                 <div className="flex items-start gap-4">
                   {/* Icon */}
@@ -575,10 +493,14 @@ export function Profiles() {
                     </div>
                   </div>
 
-                  {/* Edit button */}
+                  {/* Quick edit: opens the sheet directly in edit mode */}
                   <button
-                    onClick={() => openEdit(profile)}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      openDetail(profile, "edit")
+                    }}
                     className="shrink-0 rounded p-1.5 text-muted-foreground transition-colors hover:text-foreground hover:bg-muted"
+                    title="Edit"
                   >
                     <MoreVertical className="h-4 w-4" />
                   </button>
