@@ -1,4 +1,5 @@
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect } from "react"
+import { useSearchParams } from "react-router"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -53,6 +54,21 @@ export function Skills() {
   const [detail, setDetail] = useState<Skill | null>(null)
   const [showEdit, setShowEdit] = useState<Skill | null>(null)
   const [editDesc, setEditDesc] = useState("")
+
+  // Deep link: /skills?detail=<name> auto-opens that skill's detail sheet.
+  // Used by cross-page jumps from the profile detail sheet.
+  const [searchParams, setSearchParams] = useSearchParams()
+  useEffect(() => {
+    const target = searchParams.get("detail")
+    if (!target || !skills) return
+    const match = skills.find((s) => s.name === target)
+    if (match) setDetail(match)
+    // Clear the param regardless — if the skill is missing we don't want
+    // the effect to keep firing, and we don't want re-open on back nav.
+    const next = new URLSearchParams(searchParams)
+    next.delete("detail")
+    setSearchParams(next, { replace: true })
+  }, [searchParams, skills, setSearchParams])
 
   // Tab state
   const [tab, setTab] = useState<"registry" | "discover">("registry")

@@ -4,7 +4,6 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
-import { TagInput } from "@/components/ui/tag-input"
 import {
   Dialog,
   DialogContent,
@@ -17,8 +16,6 @@ import {
   listProfiles,
   addProject,
   removeProject,
-  linkProfileToProject,
-  unlinkProfileFromProject,
   activateProject,
   deactivateProject,
 } from "@/lib/api"
@@ -33,6 +30,7 @@ import {
   Square,
 } from "lucide-react"
 import type { Project } from "@/lib/schemas"
+import { ProjectDetailSheet } from "./projects/ProjectDetailSheet"
 
 export function Projects() {
   const queryClient = useQueryClient()
@@ -49,9 +47,8 @@ export function Projects() {
   const [showAdd, setShowAdd] = useState(false)
   const [addPath, setAddPath] = useState("")
   const [showRemove, setShowRemove] = useState<Project | null>(null)
-  const [editProject, setEditProject] = useState<Project | null>(null)
-  const [editLinked, setEditLinked] = useState<string[]>([])
-  const [saving, setSaving] = useState(false)
+  const [detailPath, setDetailPath] = useState<string | null>(null)
+  const [detailMode, setDetailMode] = useState<"view" | "edit">("view")
 
   const profileNames = profilesData?.profiles.map((p) => p.name) ?? []
 
@@ -80,56 +77,9 @@ export function Projects() {
     setAddPath("")
   }
 
-  function openEdit(project: Project) {
-    setEditProject(project)
-    setEditLinked([...project.linked_profiles])
-  }
-
-  function closeEdit() {
-    setEditProject(null)
-    setEditLinked([])
-  }
-
-  async function saveLinkedProfiles() {
-    if (!editProject) return
-    setSaving(true)
-    const current = new Set(editProject.linked_profiles)
-    const desired = new Set(editLinked)
-    const toLink = editLinked.filter((p) => !current.has(p))
-    const toUnlink = editProject.linked_profiles.filter((p) => !desired.has(p))
-
-    const errors: string[] = []
-    for (const name of toUnlink) {
-      try {
-        await unlinkProfileFromProject(editProject.path, name)
-      } catch (err) {
-        errors.push(`Unlink ${name}: ${err}`)
-      }
-    }
-    for (const name of toLink) {
-      try {
-        await linkProfileToProject(editProject.path, name)
-      } catch (err) {
-        errors.push(`Link ${name}: ${err}`)
-      }
-    }
-
-    setSaving(false)
-    queryClient.invalidateQueries({ queryKey: ["projects"] })
-
-    if (errors.length > 0) {
-      toast.error("Some operations failed", { description: errors.join("; ") })
-    } else {
-      toast.success("Profiles updated")
-    }
-    closeEdit()
-  }
-
-  function hasEditChanges(): boolean {
-    if (!editProject) return false
-    const current = editProject.linked_profiles
-    if (current.length !== editLinked.length) return true
-    return !current.every((p) => editLinked.includes(p))
+  function openDetail(project: Project, mode: "view" | "edit" = "view") {
+    setDetailMode(mode)
+    setDetailPath(project.path)
   }
 
   async function handleActivate(project: Project) {
@@ -212,58 +162,17 @@ export function Projects() {
         </DialogContent>
       </Dialog>
 
-      {/* Edit Project Dialog — attach/detach profiles */}
-      <Dialog open={editProject !== null} onOpenChange={(o) => { if (!o) closeEdit() }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Edit Project</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-1">
-              <Label className="text-xs text-muted-foreground">Project</Label>
-              <p className="text-sm font-medium">{editProject?.name}</p>
-              <p className="text-xs text-muted-foreground truncate">{editProject?.path}</p>
-            </div>
-            <hr className="border-border" />
-            <div className="space-y-2">
-              <Label>Linked Profiles</Label>
-              <p className="text-xs text-muted-foreground">
-                Search and attach profiles to this project. Use Activate to deploy them.
-              </p>
-              <TagInput
-                value={editLinked}
-                onChange={setEditLinked}
-                suggestions={profileNames}
-                placeholder="Search profiles..."
-              />
-            </div>
-          </div>
-          <DialogFooter className="justify-between">
-            <button
-              onClick={() => {
-                if (editProject) {
-                  setShowRemove(editProject)
-                  closeEdit()
-                }
-              }}
-              className="text-sm text-destructive hover:underline"
-            >
-              Remove Project
-            </button>
-            <div className="flex gap-2">
-              <Button variant="outline" onClick={closeEdit}>
-                Cancel
-              </Button>
-              <Button
-                onClick={saveLinkedProfiles}
-                disabled={!hasEditChanges() || saving}
-              >
-                {saving ? "Saving..." : "Save"}
-              </Button>
-            </div>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* Project Detail Sheet */}
+      <ProjectDetailSheet
+        project={detailPath ? projects?.find((p) => p.path === detailPath) ?? null : null}
+        profileNames={profileNames}
+        initialMode={detailMode}
+        onClose={() => setDetailPath(null)}
+        onRemove={(project) => {
+          setDetailPath(null)
+          setShowRemove(project)
+        }}
+      />
 
       {/* Remove Project Confirmation */}
       <Dialog open={showRemove !== null} onOpenChange={(o) => { if (!o) setShowRemove(null) }}>
@@ -306,7 +215,16 @@ export function Projects() {
             return (
               <div
                 key={project.path}
-                className="animate-list-item group rounded-xl border border-border bg-card p-5 transition-colors hover:border-primary/30"
+                role="button"
+                tabIndex={0}
+                onClick={() => openDetail(project, "view")}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault()
+                    openDetail(project, "view")
+                  }
+                }}
+                className="animate-list-item group cursor-pointer rounded-xl border border-border bg-card p-5 transition-colors hover:border-primary/30 focus:border-primary/50 focus:outline-none"
                 style={{ animationDelay: `${index * 50}ms` }}
               >
                 <div className="flex items-start gap-4">
@@ -366,7 +284,10 @@ export function Projects() {
                         variant="outline"
                         size="sm"
                         className="h-8 border-orange-300 text-orange-600 hover:bg-orange-50 dark:border-orange-700 dark:text-orange-400 dark:hover:bg-orange-950"
-                        onClick={() => handleDeactivate(project)}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleDeactivate(project)
+                        }}
                       >
                         <Square className="h-3.5 w-3.5" />
                         Deactivate
@@ -376,14 +297,20 @@ export function Projects() {
                         variant="outline"
                         size="sm"
                         className="h-8 border-emerald-300 text-emerald-600 hover:bg-emerald-50 dark:border-emerald-700 dark:text-emerald-400 dark:hover:bg-emerald-950"
-                        onClick={() => handleActivate(project)}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleActivate(project)
+                        }}
                       >
                         <Play className="h-3.5 w-3.5" />
                         Activate
                       </Button>
                     ) : null}
                     <button
-                      onClick={() => openEdit(project)}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        openDetail(project, "edit")
+                      }}
                       className="rounded p-1.5 text-muted-foreground transition-colors hover:text-foreground hover:bg-muted"
                       title="Edit project"
                     >

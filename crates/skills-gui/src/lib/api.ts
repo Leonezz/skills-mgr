@@ -5,6 +5,7 @@ import {
   DiscoveredSkillSchema,
   ProfilesResponseSchema,
   ProjectSchema,
+  ProjectDetailSchema,
   AgentSchema,
   LogEntrySchema,
 } from "./schemas"
@@ -146,13 +147,25 @@ export async function editProfile(
   addSkills: string[],
   removeSkills: string[],
   addIncludes: string[],
+  removeIncludes: string[],
   description?: string,
 ) {
-  return await invoke("edit_profile", { name, addSkills, removeSkills, addIncludes, description }) as string
+  return await invoke("edit_profile", {
+    name,
+    addSkills,
+    removeSkills,
+    addIncludes,
+    removeIncludes,
+    description,
+  }) as string
 }
 
 export async function deleteProfile(name: string) {
   return await invoke("delete_profile", { name }) as string
+}
+
+export async function duplicateProfile(sourceName: string, newName: string) {
+  return await invoke("duplicate_profile", { sourceName, newName }) as string
 }
 
 // --- Global Skills ---
@@ -197,6 +210,15 @@ export async function toggleAgent(name: string, enabled: boolean) {
 export async function listProjects() {
   const data = await invoke("list_projects")
   return z.array(ProjectSchema).parse(data)
+}
+
+export async function getProjectDetail(path: string) {
+  const data = await invoke("get_project_detail", { path })
+  return ProjectDetailSchema.parse(data)
+}
+
+export async function revealPath(path: string) {
+  await invoke("reveal_path", { path })
 }
 
 export async function addProject(path: string, name?: string) {
