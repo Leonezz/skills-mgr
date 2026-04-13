@@ -180,7 +180,9 @@ pub async fn run(dirs: &AppDirs, db: &Database, action: ProjectAction) -> Result
 
 fn resolve_project_path(project: Option<String>) -> Result<String> {
     match project {
-        Some(p) => Ok(std::fs::canonicalize(&p)?.to_string_lossy().to_string()),
+        Some(p) => Ok(std::fs::canonicalize(&p)
+            .map(|c| c.to_string_lossy().to_string())
+            .unwrap_or(p)),
         None => Ok(std::env::current_dir()?.to_string_lossy().to_string()),
     }
 }
