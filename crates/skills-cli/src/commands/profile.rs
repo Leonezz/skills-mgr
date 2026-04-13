@@ -136,13 +136,72 @@ pub async fn run(dirs: &AppDirs, db: &Database, action: ProfileAction) -> Result
             )
             .await?;
         }
+        ProfileAction::Duplicate { source, new_name } => {
+            if profiles_config.profiles.contains_key(&new_name) {
+                anyhow::bail!("Profile '{}' already exists", new_name);
+            }
+            let source_profile = profiles_config
+                .profiles
+                .get(&source)
+                .ok_or_else(|| anyhow::anyhow!("Profile '{}' not found", source))?
+                .clone();
+            profiles_config
+                .profiles
+                .insert(new_name.clone(), source_profile);
+            profiles::validate_no_cycles(&profiles_config)?;
+            profiles_config.save(&dirs.profiles_toml())?;
+            println!("Duplicated profile '{}' as '{}'", source, new_name);
+            logging::log(
+                db,
+                LogEntry {
+                    source: Source::Cli,
+                    agent_name: None,
+                    operation: "profile_duplicate",
+                    params: None,
+                    project_path: None,
+                    result: "success",
+                    details: &format!("Duplicated '{}' as '{}'", source, new_name),
+                },
+            )
+            .await?;
+        }
         ProfileAction::Activate {
             name,
             project,
-            global: _,
+            global,
             force,
             dry_run,
         } => {
+            if global {
+                if dry_run {
+                    println!("Dry run: would activate global skills");
+                    return Ok(());
+                }
+                let result =
+                    placements::activate_global(dirs, db, &profiles_config, &agents_config).await?;
+                println!(
+                    "Activated global skills: {} placements across {} agent(s)",
+                    result.total_placements,
+                    result.agents_used.len()
+                );
+                logging::log(
+                    db,
+                    LogEntry {
+                        source: Source::Cli,
+                        agent_name: None,
+                        operation: "global_activate",
+                        params: None,
+                        project_path: None,
+                        result: "success",
+                        details: &format!(
+                            "Activated global skills: {} placements",
+                            result.total_placements
+                        ),
+                    },
+                )
+                .await?;
+                return Ok(());
+            }
             let project_path = resolve_project_path(project)?;
             if dry_run {
                 let result = placements::dry_run_activate(
@@ -207,9 +266,37 @@ pub async fn run(dirs: &AppDirs, db: &Database, action: ProfileAction) -> Result
         ProfileAction::Deactivate {
             name,
             project,
-            global: _,
+            global,
             dry_run,
         } => {
+            if global {
+                if dry_run {
+                    println!("Dry run: would deactivate global skills");
+                    return Ok(());
+                }
+                let result = placements::deactivate_global(db).await?;
+                println!(
+                    "Deactivated global skills: {} removed",
+                    result.files_removed
+                );
+                logging::log(
+                    db,
+                    LogEntry {
+                        source: Source::Cli,
+                        agent_name: None,
+                        operation: "global_deactivate",
+                        params: None,
+                        project_path: None,
+                        result: "success",
+                        details: &format!(
+                            "Deactivated global skills: {} removed",
+                            result.files_removed
+                        ),
+                    },
+                )
+                .await?;
+                return Ok(());
+            }
             let project_path = resolve_project_path(project)?;
             if dry_run {
                 let result = placements::dry_run_deactivate(db, &name, &project_path).await?;

@@ -54,6 +54,10 @@ pub async fn run(
             }
             None => println!("Skill '{}' not found in registry", name),
         },
+        SkillAction::Read { name } => {
+            let content = registry.read_content(&name)?;
+            println!("{}", content);
+        }
         SkillAction::Create { name, description } => {
             let desc = description.as_deref().unwrap_or("TODO: add description");
             let path = registry.create(&name, desc)?;
@@ -253,8 +257,11 @@ pub async fn run(
             }
             None => println!("Skill '{}' not found", name),
         },
-        SkillAction::Discover { global_only } => {
-            super::discover::run_discover(dirs, db, global_only).await?;
+        SkillAction::Discover {
+            global_only,
+            delegate,
+        } => {
+            super::discover::run_discover(dirs, db, global_only, delegate.as_deref()).await?;
         }
         SkillAction::LinkRemote {
             name,

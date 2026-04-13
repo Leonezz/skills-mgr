@@ -1,10 +1,16 @@
 use anyhow::Result;
-use skills_core::config::AppDirs;
-use skills_core::discovery::{self, DiscoveryScope};
+use skills_core::config::{AppDirs, ProfileDef, ProfilesConfig};
+use skills_core::discovery::{self, DiscoveredSkill, DiscoveryScope};
+use skills_core::logging::{self, LogEntry, Source};
 use skills_core::placements::GLOBAL_PROJECT_PATH;
 use skills_core::{AgentsConfig, Database, Registry};
 
-pub async fn run_discover(dirs: &AppDirs, db: &Database, global_only: bool) -> Result<()> {
+pub async fn run_discover(
+    dirs: &AppDirs,
+    db: &Database,
+    global_only: bool,
+    delegate_to: Option<&str>,
+) -> Result<()> {
     let registry = Registry::new(dirs.clone());
     let agents_config = AgentsConfig::load(&dirs.agents_toml())?;
 
@@ -40,10 +46,23 @@ pub async fn run_discover(dirs: &AppDirs, db: &Database, global_only: bool) -> R
         return Ok(());
     }
 
+    print_discovered(&discovered);
+
+    if let Some(profile_name) = delegate_to {
+        delegate(dirs, db, &registry, &discovered, profile_name).await?;
+    } else {
+        println!(
+            "\nUse `skills-mgr skill discover --delegate <profile>` to import and assign these skills."
+        );
+    }
+    Ok(())
+}
+
+fn print_discovered(discovered: &[DiscoveredSkill]) {
     println!("Found {} unmanaged skill(s):\n", discovered.len());
 
     let mut current_scope = None;
-    for skill in &discovered {
+    for skill in discovered {
         let scope_label = match &skill.scope {
             DiscoveryScope::Global => "Global".to_string(),
             DiscoveryScope::Project(p) => format!("Project: {}", p),
@@ -71,8 +90,95 @@ pub async fn run_discover(dirs: &AppDirs, db: &Database, global_only: bool) -> R
             conflict,
         );
     }
+}
 
-    println!("\nUse the GUI's Discover tab to delegate skills to a profile.");
+async fn delegate(
+    dirs: &AppDirs,
+    db: &Database,
+    registry: &Registry,
+    discovered: &[DiscoveredSkill],
+    profile_name: &str,
+) -> Result<()> {
+    // Only delegate skills that don't already exist in the registry
+    let to_delegate: Vec<_> = discovered
+        .iter()
+        .filter(|s| !s.exists_in_registry)
+        .collect();
+
+    if to_delegate.is_empty() {
+        println!("\nAll discovered skills already exist in the registry.");
+        return Ok(());
+    }
+
+    println!(
+        "\nDelegating {} skill(s) to profile '{}'...",
+        to_delegate.len(),
+        profile_name
+    );
+
+    let mut imported = Vec::new();
+    for skill in &to_delegate {
+        match registry.delegate(&skill.found_path, &skill.agent_name) {
+            Ok(name) => {
+                println!("  Imported '{}'", name);
+                imported.push(name);
+            }
+            Err(e) => {
+                println!("  Failed '{}': {}", skill.name, e);
+            }
+        }
+    }
+
+    if imported.is_empty() {
+        println!("No skills were imported.");
+        return Ok(());
+    }
+
+    // Add imported skills to the target profile
+    let mut profiles_config = ProfilesConfig::load(&dirs.profiles_toml())?;
+    let profile = profiles_config
+        .profiles
+        .entry(profile_name.to_string())
+        .or_insert_with(|| {
+            println!("  Created new profile '{}'", profile_name);
+            ProfileDef {
+                description: None,
+                skills: vec![],
+                includes: vec![],
+            }
+        });
+
+    for name in &imported {
+        if !profile.skills.contains(name) {
+            profile.skills.push(name.clone());
+        }
+    }
+    profiles_config.save(&dirs.profiles_toml())?;
+
+    println!(
+        "\nDelegated {} skills to profile '{}'",
+        imported.len(),
+        profile_name
+    );
+
+    logging::log(
+        db,
+        LogEntry {
+            source: Source::Cli,
+            agent_name: None,
+            operation: "skill_delegate",
+            params: None,
+            project_path: None,
+            result: "success",
+            details: &format!(
+                "Delegated {} skills to profile '{}'",
+                imported.len(),
+                profile_name
+            ),
+        },
+    )
+    .await?;
+
     Ok(())
 }
 
