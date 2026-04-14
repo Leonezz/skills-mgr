@@ -187,6 +187,39 @@ impl Registry {
         Ok(())
     }
 
+    /// Rename a skill in the registry (directory, sources.toml, SKILL.md frontmatter).
+    /// Does NOT update profile references or placement records — callers must handle those.
+    pub fn rename(&self, old_name: &str, new_name: &str) -> Result<()> {
+        let old_dir = self.dirs.registry().join(old_name);
+        let new_dir = self.dirs.registry().join(new_name);
+        if !old_dir.exists() {
+            bail!("Skill '{}' not found in registry", old_name);
+        }
+        if new_dir.exists() {
+            bail!("Skill '{}' already exists in registry", new_name);
+        }
+
+        // 1. Rename directory
+        std::fs::rename(&old_dir, &new_dir)?;
+
+        // 2. Update SKILL.md frontmatter name field
+        let skill_md = new_dir.join("SKILL.md");
+        if skill_md.exists() {
+            let content = std::fs::read_to_string(&skill_md)?;
+            let updated = update_frontmatter_field(&content, "name", new_name);
+            std::fs::write(&skill_md, updated)?;
+        }
+
+        // 3. Move source entry in sources.toml (preserving sync metadata)
+        let mut sources = SourcesConfig::load(&self.dirs.sources_toml()).unwrap_or_default();
+        if let Some(source) = sources.skills.remove(old_name) {
+            sources.skills.insert(new_name.to_string(), source);
+            sources.save(&self.dirs.sources_toml())?;
+        }
+
+        Ok(())
+    }
+
     /// Update a skill's SKILL.md description.
     pub fn update_description(&self, name: &str, description: &str) -> Result<()> {
         let skill_dir = self.dirs.registry().join(name);
@@ -857,6 +890,42 @@ fn parse_description(skill_md: &Path) -> Result<String> {
         }
     }
     bail!("No description field in frontmatter")
+}
+
+/// Replace or insert a field in SKILL.md frontmatter.
+fn update_frontmatter_field(content: &str, field: &str, new_value: &str) -> String {
+    let trimmed = content.trim();
+    if !trimmed.starts_with("---") {
+        return format!("---\n{}: {}\n---\n\n{}", field, new_value, content);
+    }
+    let after_first = &trimmed[3..];
+    if let Some(end) = after_first.find("---") {
+        let frontmatter = &after_first[..end];
+        let rest = &after_first[end + 3..];
+
+        let prefix = format!("{}:", field);
+        let mut found = false;
+        let updated_lines: Vec<String> = frontmatter
+            .lines()
+            .map(|line| {
+                if line.trim().starts_with(&prefix) {
+                    found = true;
+                    format!("{}: {}", field, new_value)
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect();
+
+        let mut fm = updated_lines.join("\n");
+        if !found {
+            fm.push_str(&format!("\n{}: {}", field, new_value));
+        }
+
+        format!("---{}---{}", fm, rest)
+    } else {
+        content.to_string()
+    }
 }
 
 /// Replace or insert the description field in SKILL.md frontmatter.
