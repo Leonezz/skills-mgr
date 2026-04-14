@@ -21,10 +21,12 @@ skills-mgr is a cross-agent skill management tool. It manages composable skill p
 ## Quick Start
 
 ```bash
-# Add your agents (or use --all for all known presets)
-skills-mgr agent add --all
+# One-shot bootstrap for any project (registers project, sets up agents, activates global skills)
+cd /path/to/my-project
+skills-mgr init
 
-# Register a project
+# Or step-by-step:
+skills-mgr agent add --all
 skills-mgr project add /path/to/my-project
 
 # Create and import skills
@@ -36,7 +38,6 @@ skills-mgr profile create rust --add rust-patterns
 skills-mgr profile create fullstack --add react-patterns --include rust
 
 # Link a profile to your project and activate
-cd /path/to/my-project
 skills-mgr project link fullstack
 skills-mgr profile activate fullstack
 
@@ -44,6 +45,17 @@ skills-mgr profile activate fullstack
 skills-mgr status
 skills-mgr budget fullstack
 ```
+
+## Bootstrap for AI Agents
+
+To let an AI agent manage skills autonomously, the agent just needs to run:
+
+```bash
+skills-mgr guide    # Prints this full usage guide
+skills-mgr init     # One-shot project setup
+```
+
+Add to your project instructions (e.g., CLAUDE.md): `Run skills-mgr guide to learn how to manage skills for this project.`
 
 ## How Profiles Work
 
