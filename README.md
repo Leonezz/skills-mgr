@@ -93,39 +93,30 @@ After any of these methods, the app will open normally on subsequent launches.
 ## Quick Start
 
 ```bash
-# Configure your agents
-skills-mgr agent add claude-code \
-  --project-path ".claude/skills" \
-  --global-path "~/.claude/skills"
+# One-shot bootstrap for any project
+cd ~/my-project
+skills-mgr init
+# → registers project, sets up agents, activates global skills, prints guide
 
-skills-mgr agent add cursor \
-  --project-path ".cursor/skills" \
-  --global-path "~/.cursor/skills"
+# Or step-by-step:
+skills-mgr agent add --all               # Add all known agent presets
+skills-mgr project add .                 # Register current directory
 
-# Create skills
-skills-mgr skill create rust-patterns --description "Rust development patterns"
-skills-mgr skill create react-patterns --description "React development patterns"
-
-# Import from GitHub
+# Import skills
 skills-mgr skill add anthropics/skills/skills/pdf
-
-# Discover existing skills in agent paths
-skills-mgr skill discover
+skills-mgr skill create rust-patterns --description "Rust development patterns"
 
 # Build composable profiles
 skills-mgr profile create rust --add rust-patterns
 skills-mgr profile create fullstack --add react-patterns --include rust
 
 # Activate for your project
-cd ~/my-project
 skills-mgr profile activate fullstack
 # → copies rust-patterns + react-patterns to .claude/skills/ and .cursor/skills/
 
-# Check status
+# Check status and token budget
 skills-mgr status
-
-# Estimate token cost
-skills-mgr budget --profile fullstack
+skills-mgr budget fullstack
 
 # Switch profiles
 skills-mgr profile switch rust
@@ -135,12 +126,24 @@ skills-mgr profile switch rust
 skills-mgr profile deactivate rust
 ```
 
+### AI Agent Bootstrap
+
+To let an AI agent manage skills in your project, add one line to your project instructions (e.g., `CLAUDE.md`):
+
+```
+Run `skills-mgr guide` to learn how to manage skills for this project.
+```
+
+The agent runs `skills-mgr guide`, gets the full usage manual, and can operate autonomously from there.
+
 ## CLI Reference
 
 ```
 skills-mgr <COMMAND>
 
 Commands:
+  init              Initialize skills-mgr for the current project
+  guide             Print the usage guide (for AI agents and humans)
   skill             Manage skills in the registry
   profile           Manage profiles
   project           Manage projects (register, link profiles)

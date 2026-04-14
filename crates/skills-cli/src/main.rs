@@ -2,7 +2,10 @@ mod commands;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use skills_core::config::ProfilesConfig;
+use skills_core::config::{AgentDef, AgentsConfig, ProfilesConfig};
+use skills_core::logging::{self, LogEntry, Source};
+use skills_core::placements;
+use skills_core::presets;
 use skills_core::profiles;
 use skills_core::registry::compute_tree_hash;
 use skills_core::{AppDirs, Database, ProviderRegistry, Registry};
@@ -41,6 +44,10 @@ enum Commands {
         #[command(subcommand)]
         action: GlobalAction,
     },
+    /// Initialize skills-mgr for the current project
+    Init,
+    /// Print the skills-mgr usage guide (for AI agents and humans)
+    Guide,
     /// Show active profiles and placements for a project
     Status {
         /// Target project path (default: current directory)
@@ -312,6 +319,14 @@ async fn main() -> Result<()> {
     let providers = ProviderRegistry::with_hubs(&all_hubs);
 
     match cli.command {
+        Commands::Guide => {
+            let registry = Registry::new(dirs.clone());
+            let content = registry.read_content("skills-mgr-guide")?;
+            println!("{}", content);
+        }
+        Commands::Init => {
+            run_init(&dirs, &db).await?;
+        }
         Commands::Skill { action } => commands::skill::run(&dirs, &db, &providers, action).await?,
         Commands::Profile { action } => commands::profile::run(&dirs, &db, action).await?,
         Commands::Agent { action } => commands::agent::run(&dirs, &db, action).await?,
@@ -335,6 +350,96 @@ async fn main() -> Result<()> {
             run_budget(&dirs, &db, profile, project).await?;
         }
     }
+
+    Ok(())
+}
+
+async fn run_init(dirs: &AppDirs, db: &Database) -> Result<()> {
+    let project_path = std::env::current_dir()?.to_string_lossy().to_string();
+    let display_name = std::path::Path::new(&project_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(&project_path)
+        .to_string();
+
+    println!("Initializing skills-mgr for '{}'...\n", display_name);
+
+    // 1. Register project
+    db.get_or_create_project(&project_path, Some(&display_name))
+        .await?;
+    println!("  [+] Registered project '{}'", display_name);
+
+    // 2. Add agent presets if none configured
+    let mut agents_config = AgentsConfig::load(&dirs.agents_toml())?;
+    if agents_config.agents.is_empty() {
+        for preset in presets::all_presets() {
+            agents_config.agents.insert(
+                preset.name.to_string(),
+                AgentDef {
+                    project_path: preset.project_path.to_string(),
+                    global_path: preset.global_path.to_string(),
+                    enabled: true,
+                },
+            );
+        }
+        agents_config.save(&dirs.agents_toml())?;
+        println!(
+            "  [+] Added {} agent presets ({})",
+            presets::all_presets().len(),
+            presets::all_presets()
+                .iter()
+                .map(|p| p.name)
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    } else {
+        println!(
+            "  [=] {} agent(s) already configured",
+            agents_config.agents.len()
+        );
+    }
+
+    // 3. Activate global skills if configured
+    let profiles_config = ProfilesConfig::load(&dirs.profiles_toml())?;
+    if !profiles_config.global.skills.is_empty() {
+        let status = placements::global_status(db, &profiles_config).await?;
+        if !status.is_active {
+            let result =
+                placements::activate_global(dirs, db, &profiles_config, &agents_config).await?;
+            println!(
+                "  [+] Activated global skills ({} placements)",
+                result.total_placements
+            );
+        } else {
+            println!(
+                "  [=] Global skills already active ({} placed)",
+                status.placed_skills.len()
+            );
+        }
+    } else {
+        println!("  [=] No global skills configured");
+    }
+
+    // 4. Log the operation
+    logging::log(
+        db,
+        LogEntry {
+            source: Source::Cli,
+            agent_name: None,
+            operation: "project_init",
+            params: None,
+            project_path: Some(&project_path),
+            result: "success",
+            details: &format!("Initialized project '{}'", display_name),
+        },
+    )
+    .await?;
+
+    // 5. Print the guide
+    println!("\n---\n");
+    let registry = Registry::new(dirs.clone());
+    let content = registry.read_content("skills-mgr-guide")?;
+    println!("{}", content);
 
     Ok(())
 }
