@@ -76,10 +76,12 @@ When you deactivate a profile, only skills unique to that profile are removed. S
 skills-mgr skill list                          # List all skills
 skills-mgr skill create <name> --description   # Create new skill scaffold
 skills-mgr skill add <source>                  # Add from GitHub/local/hub
+skills-mgr skill add <source> --rename-to <n>  # Import under a different name
 skills-mgr skill info <name>                   # Show metadata and files
 skills-mgr skill read <name>                   # Display SKILL.md content
 skills-mgr skill files <name>                  # List skill files
 skills-mgr skill remove <name>                 # Remove from registry
+skills-mgr skill rename <name> <new_name>      # Rename (preserves sync source)
 skills-mgr skill open <name>                   # Open directory in editor
 skills-mgr skill update <name>                 # Update from remote source
 skills-mgr skill update --all                  # Update all remote-sourced skills
@@ -106,6 +108,7 @@ skills-mgr profile edit <name> \
   --add new-skill --remove old-skill \
   --include other-profile                      # Edit skills and includes
 skills-mgr profile duplicate <source> <new>    # Clone a profile
+skills-mgr profile rename <old> <new>          # Rename a profile
 skills-mgr profile delete <name>               # Delete profile
 
 # Activation (defaults to current directory)
