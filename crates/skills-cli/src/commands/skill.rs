@@ -93,6 +93,53 @@ pub async fn run(
             )
             .await?;
         }
+        SkillAction::Rename { name, new_name } => {
+            // 1. Rename in registry (directory, sources.toml, frontmatter)
+            registry.rename(&name, &new_name)?;
+
+            // 2. Update all profile references
+            let mut profiles_config =
+                skills_core::config::ProfilesConfig::load(&dirs.profiles_toml())?;
+            let mut updated_profiles = Vec::new();
+            for (prof_name, profile) in profiles_config.profiles.iter_mut() {
+                if let Some(pos) = profile.skills.iter().position(|s| s == &name) {
+                    profile.skills[pos] = new_name.clone();
+                    updated_profiles.push(prof_name.clone());
+                }
+            }
+            if !updated_profiles.is_empty() {
+                profiles_config.save(&dirs.profiles_toml())?;
+            }
+
+            // 3. Update all placement records
+            let renamed_placements = db.rename_skill_in_placements(&name, &new_name).await?;
+
+            println!("Renamed skill '{}' to '{}'", name, new_name);
+            if !updated_profiles.is_empty() {
+                println!(
+                    "  Updated {} profile(s): {}",
+                    updated_profiles.len(),
+                    updated_profiles.join(", ")
+                );
+            }
+            if renamed_placements > 0 {
+                println!("  Updated {} placement(s)", renamed_placements);
+            }
+
+            logging::log(
+                db,
+                LogEntry {
+                    source: Source::Cli,
+                    agent_name: None,
+                    operation: "skill_rename",
+                    params: None,
+                    project_path: None,
+                    result: "success",
+                    details: &format!("Renamed skill '{}' to '{}'", name, new_name),
+                },
+            )
+            .await?;
+        }
         SkillAction::Files { name } => match registry.get(&name)? {
             Some(skill) => {
                 for f in &skill.files {
@@ -101,10 +148,14 @@ pub async fn run(
             }
             None => println!("Skill '{}' not found", name),
         },
-        SkillAction::Add { source } => {
+        SkillAction::Add { source, rename_to } => {
             let path = std::path::Path::new(&source);
             if path.exists() {
-                let name = registry.add_from_local(path)?;
+                let mut name = registry.add_from_local(path)?;
+                if let Some(ref alias) = rename_to {
+                    registry.rename(&name, alias)?;
+                    name = alias.clone();
+                }
                 println!("Added skill '{}' from local path", name);
                 logging::log(
                     db,
@@ -121,7 +172,11 @@ pub async fn run(
                 .await?;
             } else if let Some(provider) = providers.detect(&source) {
                 println!("Downloading via {} provider...", provider.provider_type());
-                let name = registry.add_from_provider(&source, provider).await?;
+                let mut name = registry.add_from_provider(&source, provider).await?;
+                if let Some(ref alias) = rename_to {
+                    registry.rename(&name, alias)?;
+                    name = alias.clone();
+                }
                 println!("Added skill '{}' from remote", name);
                 logging::log(
                     db,

@@ -136,6 +136,43 @@ pub async fn run(dirs: &AppDirs, db: &Database, action: ProfileAction) -> Result
             )
             .await?;
         }
+        ProfileAction::Rename { old_name, new_name } => {
+            if !profiles_config.profiles.contains_key(&old_name) {
+                anyhow::bail!("Profile '{}' not found", old_name);
+            }
+            if profiles_config.profiles.contains_key(&new_name) {
+                anyhow::bail!("Profile '{}' already exists", new_name);
+            }
+
+            let profile = profiles_config.profiles.remove(&old_name).unwrap();
+            profiles_config.profiles.insert(new_name.clone(), profile);
+
+            // Update includes references in other profiles
+            for (_, p) in profiles_config.profiles.iter_mut() {
+                if let Some(pos) = p.includes.iter().position(|i| i == &old_name) {
+                    p.includes[pos] = new_name.clone();
+                }
+            }
+
+            profiles::validate_no_cycles(&profiles_config)?;
+            profiles_config.save(&dirs.profiles_toml())?;
+            db.rename_profile(&old_name, &new_name).await?;
+
+            println!("Renamed profile '{}' to '{}'", old_name, new_name);
+            logging::log(
+                db,
+                LogEntry {
+                    source: Source::Cli,
+                    agent_name: None,
+                    operation: "profile_rename",
+                    params: None,
+                    project_path: None,
+                    result: "success",
+                    details: &format!("Renamed '{}' to '{}'", old_name, new_name),
+                },
+            )
+            .await?;
+        }
         ProfileAction::Duplicate { source, new_name } => {
             if profiles_config.profiles.contains_key(&new_name) {
                 anyhow::bail!("Profile '{}' already exists", new_name);

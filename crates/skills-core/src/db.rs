@@ -533,6 +533,83 @@ impl Database {
         Ok(rows.into_iter().map(|r| r.profile_name).collect())
     }
 
+    /// Rename a skill across all placement records.
+    pub async fn rename_skill_in_placements(&self, old_name: &str, new_name: &str) -> Result<u64> {
+        let rows = placements::Entity::find()
+            .filter(placements::Column::SkillName.eq(old_name))
+            .all(&self.conn)
+            .await?;
+        let count = rows.len() as u64;
+        for row in rows {
+            let mut model: placements::ActiveModel = row.into();
+            model.skill_name = Set(new_name.to_string());
+            model.update(&self.conn).await?;
+        }
+        Ok(count)
+    }
+
+    /// Rename a profile across all DB tables (active profiles, linked profiles,
+    /// placement-profile associations).
+    pub async fn rename_profile(&self, old_name: &str, new_name: &str) -> Result<()> {
+        // 1. project_profiles (active profiles) — composite PK, must delete+insert
+        let active_rows = project_profiles::Entity::find()
+            .filter(project_profiles::Column::ProfileName.eq(old_name))
+            .all(&self.conn)
+            .await?;
+        for row in active_rows {
+            project_profiles::Entity::delete_by_id((row.project_id, old_name.to_string()))
+                .exec(&self.conn)
+                .await?;
+            let new_row = project_profiles::ActiveModel {
+                project_id: Set(row.project_id),
+                profile_name: Set(new_name.to_string()),
+                activated_at: Set(row.activated_at),
+            };
+            project_profiles::Entity::insert(new_row)
+                .exec(&self.conn)
+                .await?;
+        }
+
+        // 2. project_linked_profiles — composite PK, must delete+insert
+        let linked_rows = project_linked_profiles::Entity::find()
+            .filter(project_linked_profiles::Column::ProfileName.eq(old_name))
+            .all(&self.conn)
+            .await?;
+        for row in linked_rows {
+            project_linked_profiles::Entity::delete_by_id((row.project_id, old_name.to_string()))
+                .exec(&self.conn)
+                .await?;
+            let new_row = project_linked_profiles::ActiveModel {
+                project_id: Set(row.project_id),
+                profile_name: Set(new_name.to_string()),
+                linked_at: Set(row.linked_at),
+            };
+            project_linked_profiles::Entity::insert(new_row)
+                .exec(&self.conn)
+                .await?;
+        }
+
+        // 3. placement_profiles — composite PK, must delete+insert
+        let pp_rows = placement_profiles::Entity::find()
+            .filter(placement_profiles::Column::ProfileName.eq(old_name))
+            .all(&self.conn)
+            .await?;
+        for row in pp_rows {
+            placement_profiles::Entity::delete_by_id((row.placement_id, old_name.to_string()))
+                .exec(&self.conn)
+                .await?;
+            let new_row = placement_profiles::ActiveModel {
+                placement_id: Set(row.placement_id),
+                profile_name: Set(new_name.to_string()),
+            };
+            placement_profiles::Entity::insert(new_row)
+                .exec(&self.conn)
+                .await?;
+        }
+
+        Ok(())
+    }
+
     /// Collect all placed skill target paths across all projects.
     /// Returns a HashSet of canonicalized absolute paths for use in discovery filtering.
     pub async fn collect_placed_paths(&self) -> Result<std::collections::HashSet<String>> {

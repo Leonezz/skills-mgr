@@ -84,9 +84,19 @@ pub enum SkillAction {
     List,
     Add {
         source: String,
+        /// Store under a different name (avoids conflicts with existing skills)
+        #[arg(long, alias = "as")]
+        rename_to: Option<String>,
     },
     Remove {
         name: String,
+    },
+    /// Rename a skill (preserves sync source)
+    Rename {
+        /// Current skill name
+        name: String,
+        /// New skill name
+        new_name: String,
     },
     Update {
         name: Option<String>,
@@ -179,6 +189,13 @@ pub enum ProfileAction {
     Duplicate {
         /// Source profile name
         source: String,
+        /// New profile name
+        new_name: String,
+    },
+    /// Rename a profile
+    Rename {
+        /// Current profile name
+        old_name: String,
         /// New profile name
         new_name: String,
     },
