@@ -31,6 +31,11 @@ enum Commands {
         #[command(subcommand)]
         action: AgentAction,
     },
+    /// Manage projects (register, link profiles)
+    Project {
+        #[command(subcommand)]
+        action: ProjectAction,
+    },
     /// Manage global skills (placed in agent global paths)
     Global {
         #[command(subcommand)]
@@ -84,6 +89,10 @@ pub enum SkillAction {
     Info {
         name: String,
     },
+    /// Display the content of a skill (SKILL.md or all files)
+    Read {
+        name: String,
+    },
     Create {
         name: String,
         #[arg(long)]
@@ -102,6 +111,9 @@ pub enum SkillAction {
         /// Only scan global paths (skip project paths)
         #[arg(long)]
         global_only: bool,
+        /// Import discovered skills and assign to this profile
+        #[arg(long)]
+        delegate: Option<String>,
     },
     /// Link a local skill to a remote GitHub URL for sync
     LinkRemote {
@@ -155,6 +167,13 @@ pub enum ProfileAction {
         remove: Vec<String>,
         #[arg(long, value_delimiter = ',')]
         include: Vec<String>,
+    },
+    /// Duplicate a profile with a new name
+    Duplicate {
+        /// Source profile name
+        source: String,
+        /// New profile name
+        new_name: String,
     },
     Activate {
         name: String,
@@ -243,6 +262,41 @@ pub enum AgentAction {
     },
 }
 
+#[derive(Subcommand)]
+pub enum ProjectAction {
+    /// List all registered projects
+    List,
+    /// Register a project directory
+    Add {
+        /// Path to the project directory
+        path: String,
+        /// Display name (default: directory name)
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Unregister a project
+    Remove {
+        /// Path to the project directory
+        path: String,
+    },
+    /// Link a profile to a project
+    Link {
+        /// Profile name to link
+        profile: String,
+        /// Project path (default: current directory)
+        #[arg(long)]
+        project: Option<String>,
+    },
+    /// Unlink a profile from a project
+    Unlink {
+        /// Profile name to unlink
+        profile: String,
+        /// Project path (default: current directory)
+        #[arg(long)]
+        project: Option<String>,
+    },
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -261,14 +315,15 @@ async fn main() -> Result<()> {
         Commands::Skill { action } => commands::skill::run(&dirs, &db, &providers, action).await?,
         Commands::Profile { action } => commands::profile::run(&dirs, &db, action).await?,
         Commands::Agent { action } => commands::agent::run(&dirs, &db, action).await?,
+        Commands::Project { action } => commands::project::run(&dirs, &db, action).await?,
         Commands::Global { action } => commands::global::run(&dirs, &db, action).await?,
         Commands::Status { project } => commands::status::run(&dirs, &db, project).await?,
         Commands::Log {
-            project: _,
-            source: _,
+            project,
+            source,
             limit,
         } => {
-            commands::util::show_log(&db, limit).await?;
+            commands::util::show_log(&db, limit, project.as_deref(), source.as_deref()).await?;
         }
         Commands::CheckConflicts { project } => {
             run_check_conflicts(&dirs, &db, project).await?;
@@ -277,7 +332,7 @@ async fn main() -> Result<()> {
             run_doctor(&dirs, &db).await?;
         }
         Commands::Budget { profile, project } => {
-            run_budget(&dirs, profile, project)?;
+            run_budget(&dirs, &db, profile, project).await?;
         }
     }
 
@@ -411,15 +466,30 @@ async fn run_doctor(dirs: &AppDirs, _db: &Database) -> Result<()> {
     Ok(())
 }
 
-fn run_budget(dirs: &AppDirs, profile: Option<String>, project: Option<String>) -> Result<()> {
-    if project.is_some() {
-        eprintln!("warning: --project filter is not yet implemented, ignoring");
-    }
+async fn run_budget(
+    dirs: &AppDirs,
+    db: &Database,
+    profile: Option<String>,
+    project: Option<String>,
+) -> Result<()> {
     let profiles_config = ProfilesConfig::load(&dirs.profiles_toml())?;
     let registry = Registry::new(dirs.clone());
 
     let skill_names = if let Some(profile_name) = &profile {
         profiles::resolve_profile(&profiles_config, profile_name, true)?
+    } else if let Some(project_path) = &project {
+        let canonical = std::fs::canonicalize(project_path)?
+            .to_string_lossy()
+            .to_string();
+        let project_id = db.get_or_create_project(&canonical, None).await?;
+        let active = db.get_active_profiles(project_id).await?;
+        if active.is_empty() {
+            println!("No active profiles for {}", canonical);
+            return Ok(());
+        }
+        println!("Budget for project: {}", canonical);
+        println!("Active profiles: {}\n", active.join(", "));
+        profiles::resolve_active_profiles(&profiles_config, &active)?
     } else {
         registry.list()?.into_iter().map(|s| s.name).collect()
     };

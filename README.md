@@ -143,6 +143,7 @@ skills-mgr <COMMAND>
 Commands:
   skill             Manage skills in the registry
   profile           Manage profiles
+  project           Manage projects (register, link profiles)
   agent             Manage agent configurations
   global            Manage global skills (machine-level)
   status            Show active profiles and placements
@@ -156,18 +157,27 @@ Commands:
 
 ```bash
 skills-mgr skill list                          # List all skills
-skills-mgr skill create <name> --description   # Create new skill
-skills-mgr skill add <source>                  # Add from git/local/registry
+skills-mgr skill create <name> --description   # Create new skill scaffold
+skills-mgr skill add <source>                  # Add from GitHub/local/hub
 skills-mgr skill add anthropics/skills/skills/pdf  # Import from GitHub subdirectory
 skills-mgr skill add owner/repo               # Import entire repo as skill
-skills-mgr skill info <name>                   # Show details & files
+skills-mgr skill info <name>                   # Show metadata & files
+skills-mgr skill read <name>                   # Display SKILL.md content
 skills-mgr skill files <name>                  # List skill files
 skills-mgr skill remove <name>                 # Remove from registry
-skills-mgr skill open <name>                   # Open in editor
+skills-mgr skill open <name>                   # Open directory in editor
+skills-mgr skill update <name>                 # Update from remote source
+skills-mgr skill update --all                  # Update all remote-sourced skills
+skills-mgr skill sync                          # Re-fetch all git-sourced skills
 skills-mgr skill discover                      # Find unmanaged skills in agent paths
 skills-mgr skill discover --global-only        # Scan only global paths
+skills-mgr skill discover --delegate <profile> # Import and assign to a profile
+skills-mgr skill browse <source>               # Browse skills in a remote repo
+skills-mgr skill browse --hub <name>           # Browse a configured skill hub
+skills-mgr skill hubs                          # List configured skill hubs
 skills-mgr skill link-remote <name> \
   --url https://github.com/owner/repo \
+  --subpath path/to/skill \
   --git-ref main                               # Link local skill to remote
 skills-mgr skill unlink-remote <name>          # Unlink from remote
 ```
@@ -177,22 +187,42 @@ Supported GitHub import formats:
 - `owner/repo` — Shorthand, defaults to `main` branch
 - `owner/repo/path/to/skill` — Shorthand with subpath
 
-The GUI also supports **browsing multi-skill repos** — enter a collection repo URL like `anthropics/skills` and the app discovers all skills in the repo, letting you select which ones to import.
+The GUI and CLI also support **browsing multi-skill repos** — `skill browse owner/repo` discovers all skills in the repo, letting you select which ones to import. Use `--hub <name>` to browse configured skill hubs.
 
 ### Profiles
 
 ```bash
 skills-mgr profile list                        # List all profiles
+skills-mgr profile show <name>                 # Show resolved skill list
 skills-mgr profile create <name> \
   --add skill1,skill2 \
   --include base-profile                       # Create with composition
-skills-mgr profile show <name>                 # Show resolved skills
-skills-mgr profile activate <name>             # Activate for project
-skills-mgr profile deactivate <name>           # Deactivate
-skills-mgr profile switch <name>               # Switch active profile
 skills-mgr profile edit <name> \
-  --add new-skill --remove old-skill           # Edit existing profile
+  --add new-skill --remove old-skill \
+  --include other-profile                      # Edit skills and includes
+skills-mgr profile duplicate <source> <new>    # Clone a profile
 skills-mgr profile delete <name>               # Delete profile
+skills-mgr profile activate <name>             # Activate for current project
+skills-mgr profile activate <name> --project /path  # Activate for specific project
+skills-mgr profile activate <name> --dry-run   # Preview without making changes
+skills-mgr profile activate <name> --force     # Overwrite conflicts
+skills-mgr profile activate --global           # Activate global skills
+skills-mgr profile deactivate <name>           # Deactivate
+skills-mgr profile deactivate --global         # Deactivate global skills
+skills-mgr profile switch <name>               # Switch from current active profile
+skills-mgr profile switch <name> --from old    # Switch from a specific profile
+```
+
+### Projects
+
+```bash
+skills-mgr project list                        # List registered projects
+skills-mgr project add <path>                  # Register a project directory
+skills-mgr project add <path> --name myproj    # Register with custom display name
+skills-mgr project remove <path>               # Unregister a project
+skills-mgr project link <profile>              # Link profile to current project
+skills-mgr project link <profile> --project /path  # Link to specific project
+skills-mgr project unlink <profile>            # Unlink profile from current project
 ```
 
 ### Global Skills
@@ -209,12 +239,28 @@ skills-mgr global deactivate                   # Remove from agent global paths
 
 ```bash
 skills-mgr agent list                          # List configured agents
+skills-mgr agent add --all                     # Add all known agent presets
 skills-mgr agent add <name> \
   --project-path ".claude/skills" \
-  --global-path "~/.claude/skills"             # Add agent
+  --global-path "~/.claude/skills"             # Add specific agent
 skills-mgr agent remove <name>                 # Remove agent
-skills-mgr agent enable <name>                 # Enable agent
-skills-mgr agent disable <name>                # Disable agent
+skills-mgr agent enable <name>                 # Enable agent for project
+skills-mgr agent disable <name>                # Disable agent for project
+```
+
+### Utilities
+
+```bash
+skills-mgr status                              # Active profiles and placements
+skills-mgr status --project /path              # Status for specific project
+skills-mgr budget <profile>                    # Token cost for a profile
+skills-mgr budget --project /path              # Token cost for active project profiles
+skills-mgr log                                 # Recent operations (default: 20)
+skills-mgr log --project /path                 # Filter logs by project
+skills-mgr log --source cli                    # Filter by source (cli/gui/mcp)
+skills-mgr log --limit 50                      # Show more entries
+skills-mgr check-conflicts                     # Scan for overlapping skills
+skills-mgr doctor                              # Verify registry/placement integrity
 ```
 
 ## Core Concepts
@@ -276,6 +322,44 @@ The discovery engine scans configured agent paths for `SKILL.md` files that exis
 Discovered skills can be:
 - **Delegated** — imported into the registry and assigned to a profile
 - **Linked to remote** — connected to a GitHub repo URL for upstream sync
+
+## MCP Server
+
+The MCP (Model Context Protocol) server provides programmatic access for AI agents. It exposes 19 tools:
+
+| Tool | Purpose |
+|------|---------|
+| `list_skills` | List all skills in the registry |
+| `create_skill` | Create a new skill scaffold |
+| `remove_skill` | Remove a skill from the registry |
+| `add_skill` | Import a skill from a source URL |
+| `update_skill` | Update a remote-sourced skill |
+| `sync_skills` | Re-fetch all git-sourced skills |
+| `link_remote` | Link a local skill to a GitHub repo |
+| `unlink_remote` | Unlink a skill from its remote |
+| `list_profiles` | List all profiles with resolved skills |
+| `create_profile` | Create a new profile |
+| `delete_profile` | Delete a profile |
+| `activate_profile` | Activate a profile for a project |
+| `deactivate_profile` | Deactivate a profile |
+| `switch_profile` | Switch active profile |
+| `global_status` | Show global skills status |
+| `activate_global` | Activate global skills |
+| `deactivate_global` | Deactivate global skills |
+| `edit_global_skills` | Set the global skills list |
+| `list_agents` | List configured agents |
+| `add_agent` | Add an agent |
+| `list_agent_presets` | List known agent presets |
+| `get_status` | Get project status |
+| `discover_skills` | Scan for unmanaged skills |
+
+Enable the MCP server in `~/.skills-mgr/settings.toml`:
+
+```toml
+mcp_enabled = true
+mcp_port = 3100
+mcp_transport = "stdio"
+```
 
 ## Architecture
 
