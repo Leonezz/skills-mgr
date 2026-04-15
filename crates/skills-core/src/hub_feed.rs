@@ -187,10 +187,6 @@ impl FeedProvider {
         let cursor = std::io::Cursor::new(&bytes);
         let mut archive = zip::ZipArchive::new(cursor).context("Failed to open ZIP archive")?;
 
-        let extract_canonical = extract_dir
-            .canonicalize()
-            .unwrap_or_else(|_| extract_dir.clone());
-
         for i in 0..archive.len() {
             let mut file = archive.by_index(i)?;
             let name = file.name().to_string();
@@ -200,19 +196,22 @@ impl FeedProvider {
                 continue;
             }
 
-            let out_path = extract_dir.join(&name);
-            if let Some(parent) = out_path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-
             // Guard against path traversal (e.g., "../../etc/malicious" in ZIP)
-            let out_canonical = out_path.canonicalize().unwrap_or_else(|_| out_path.clone());
-            if !out_canonical.starts_with(&extract_canonical) {
+            let entry_path = std::path::Path::new(&name);
+            if entry_path
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+            {
                 tracing::warn!(
                     path = %name,
                     "Skipping ZIP entry with path traversal"
                 );
                 continue;
+            }
+
+            let out_path = extract_dir.join(&name);
+            if let Some(parent) = out_path.parent() {
+                std::fs::create_dir_all(parent)?;
             }
 
             let mut outfile = std::fs::File::create(&out_path)?;
